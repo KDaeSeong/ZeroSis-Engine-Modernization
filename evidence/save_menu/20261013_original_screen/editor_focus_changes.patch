@@ -1,0 +1,165 @@
+--- before_focus/Source/Host/UiScene.lua
++++ after_focus/Source/Host/UiScene.lua
+@@ -86,6 +86,14 @@
+ local gameMenuUnavailableAction,clearGameMenuNotice
+ local gameMenuRawMapScript,gameMenuDatabaseMapScript
+ local focusedEditBox,saveMenuCurrent
++local editFocusEpoch=0
++local function setEditFocus(handle)
++  if handle~=focusedEditBox or handle~=nil then
++    assert(editFocusEpoch<9007199254740991,'Edit focus epoch exhausted')
++    editFocusEpoch=editFocusEpoch+1
++  end
++  focusedEditBox=handle
++end
+ local saveMenuCanSave
+ local gameMenuChildren={LoadMenu='LoadMenu',SaveMenu='SaveMenu',SaveMapMenu='SaveMapMenu',
+   OptionsMenu_InGame='OptionsMenu',TouchControlsMenu='TouchControlsMenu'}
+@@ -816,7 +824,7 @@
+   assert(hasRetainedSaveMenuUi and active and not contextHidden and timer==0 and
+     target.kind=='EditBox' and target.attributes.ID=='NameBox',
+     'TakeFocus requires the live original SaveMenu NameBox')
+-  focusedEditBox=self;target.caret=#utf8Characters(target.label)
++  setEditFocus(self);target.caret=#utf8Characters(target.label)
+ end
+ function methods:SetString(value)
+   local target=state(self)
+@@ -2028,7 +2036,7 @@
+   if hasRetainedPopupUi or hasRetainedLeaderUi then updateAnimations(root,false,true,frameTime()) end
+   if showHide then showHide(true,false) end
+   active=false;contextHidden=true;inputContextName=nil;lifecycle[#lifecycle+1]='closed'
+-  if hasRetainedSaveMenuUi then focusedEditBox=nil;native('saveMenuClose') end
++  if hasRetainedSaveMenuUi then setEditFocus(nil);native('saveMenuClose') end
+   if hasRetainedTreeUi or hasRetainedCaptureUi then researchProcessedPending=true end
+ end
+ function UIManager:IsModal(ctx)
+@@ -2784,8 +2792,10 @@
+       metadata.owner=Game.GetActivePlayer();metadata.turn=Game.GetGameTurn()
+       metadata.modal=true;metadata.timerSemaphore=timer;metadata.parentContext='GameMenu'
+       metadata.focusKey=focusedEditBox and state(focusedEditBox).key or 0
++      metadata.focusEpoch=editFocusEpoch
+       metadata.textInputEnabled=active and not contextHidden and inputContextName==contextName and
+         focusedEditBox~=nil and gameMenuInputAllowed(focusedEditBox) and not inheritedDisabled(focusedEditBox)
++      metadata.textInputFocusToken=metadata.textInputEnabled and editFocusEpoch or 0
+       metadata.name=name.label;metadata.nameAvailable=saveMenuCanSave()
+       metadata.catalogCount=type(g_SavedGames)=='table' and #g_SavedGames or 0
+       metadata.retailTextEditingVerified=false
+--- before_focus/Source/Presentation/UiPresentationInput.lua
++++ after_focus/Source/Presentation/UiPresentationInput.lua
+@@ -75,6 +75,10 @@
+ 
+ function ZeroSisUi.IsTextInputEnabled()
+   return liveEditBox()~=nil
++end
++
++function ZeroSisUi.GetTextInputFocusToken()
++  return liveEditBox() and editFocusEpoch or 0
+ end
+ 
+ local function notifyEditBox(value,isEnter)
+@@ -147,7 +151,7 @@
+     if eventName~=Mouse.eLClick or not isLeftInputTarget(handle,value) then return false end
+     handle:TakeFocus();return true
+   end
+-  if hasRetainedSaveMenuUi and eventName==Mouse.eLClick then focusedEditBox=nil end
++  if hasRetainedSaveMenuUi and eventName==Mouse.eLClick then setEditFocus(nil) end
+   local consumed=invokeCallback(handle,eventName)
+   flushRetainedInputLayout()
+   return consumed
+--- before_focus/tools/ui_pixel_scene.py
++++ after_focus/tools/ui_pixel_scene.py
+@@ -142,6 +142,8 @@
+             type(name.get('focused')) is bool and menu.get('name') == name['text'] and
+             menu.get('focusKey') == (name['key'] if name['focused'] else 0) and
+             menu.get('textInputEnabled') is (not closed and name['focused'] and named['DeleteConfirm']['hidden']) and
++            type(menu.get('focusEpoch')) is int and 0 < menu['focusEpoch'] <= 9007199254740991 and
++            menu.get('textInputFocusToken') == (menu['focusEpoch'] if menu['textInputEnabled'] else 0) and
+             type(menu.get('nameAvailable')) is bool and
+             named['SaveButton']['disabled'] is (not menu['nameAvailable']),
+             'SaveMenu NameBox focus, length, caret, or name availability changed')
+--- before_focus/Tests/save_menu_scene.py
++++ after_focus/Tests/save_menu_scene.py
+@@ -105,6 +105,7 @@
+ end
+ local function replaceName(value)
+  click('NameBox');env.ZeroSisUi.DispatchKeyDown(35)
++ local focusToken=env.ZeroSisUi.GetTextInputFocusToken()
+  for _=1,#unicodeChars(env.Controls.NameBox:GetText()) do check(env.ZeroSisUi.DispatchKeyDown(8),'Backspace failed') end
+  for _,ch in ipairs(unicodeChars(value)) do
+   local bytes={ch:byte(1,#ch)};local scalar=bytes[1]
+@@ -113,12 +114,17 @@
+   check(env.ZeroSisUi.DispatchTextInput(scalar),'Unicode insert failed')
+  end
+  check(env.Controls.NameBox:GetText()==value,'NameBox differs from inserted Unicode scalars')
++ check(env.ZeroSisUi.GetTextInputFocusToken()==focusToken and focusToken>0,'Editing changed the focused editor lifetime')
+ end
+ check(not env.ZeroSisUi.DispatchTextInput(0xAC00),'Closed child accepted text')
++check(env.ZeroSisUi.GetTextInputFocusToken()==0,'Closed editor has a focus token')
+ env.ZeroSisUi.OpenSaveMenu()
+ local opened=snap();local openedJson=json(opened)
+ check(opened.active and opened.timerSemaphore==0 and opened.saveMenu.parentContext=='GameMenu','Child lifetime/timer wrong')
+ check(opened.saveMenu.catalogCount==2 and opened.saveMenu.textInputEnabled,'Real list/focus absent')
++check(opened.saveMenu.focusEpoch>0 and opened.saveMenu.textInputFocusToken==opened.saveMenu.focusEpoch and
++ env.ZeroSisUi.GetTextInputFocusToken()==opened.saveMenu.focusEpoch,'Opened editor token absent')
++check(snap().saveMenu.focusEpoch==opened.saveMenu.focusEpoch,'Scene refresh changed editor lifetime')
+ check(node(opened.tree,'NameBox').maxLength==32,'Original MaxLength changed')
+ for _,id in ipairs({'Delete','CloudCheck','SaveMapButton','Yes'}) do
+  check(node(opened.tree,id).disabled and not target(id),'Unsupported action remained callable '..id)
+@@ -133,17 +139,22 @@
+ check(#rows==2,'Original LoadButton instances missing')
+ check(env.ZeroSisUi.DispatchLeftClick(rows[1]),'Known list entry click failed')
+ local selected=snap()
++check(not selected.saveMenu.textInputEnabled and selected.saveMenu.focusEpoch>opened.saveMenu.focusEpoch and
++ env.ZeroSisUi.GetTextInputFocusToken()==0,'List selection retained stale editor ownership')
+ check(node(selected.tree,'NameBox').text=='기존 저장' and node(selected.tree,'SaveButton').disabled,'Duplicate selection enabled overwrite')
+ check(node(selected.tree,'TimeSaved').text=='2026-10-13 12:00','Known header date missing')
+ check(env.ZeroSisUi.DispatchLeftClick(rows[2]),'Unknown header entry click failed')
+ check(node(snap().tree,'TimeSaved').text=='' and node(snap().tree,'SaveButton').disabled,'Unknown archive fabricated preview/enabled overwrite')
+ replaceName('한글 저장')
++local editingToken=env.ZeroSisUi.GetTextInputFocusToken()
++check(editingToken>selected.saveMenu.focusEpoch,'Refocusing reused blurred editor ownership')
+ check(not node(snap().tree,'SaveButton').disabled,'Unique Korean name did not enable Save')
+ check(env.ZeroSisUi.DispatchKeyDown(36) and env.ZeroSisUi.DispatchKeyDown(39),'Caret keys failed')
+ check(env.ZeroSisUi.DispatchTextInput(0xB098),'Middle Unicode insert failed')
+ check(env.Controls.NameBox:GetText()=='한나글 저장','Insert did not use codepoint caret')
+ check(env.ZeroSisUi.DispatchKeyDown(8) and env.Controls.NameBox:GetText()=='한글 저장','Backspace split Unicode scalar')
+ check(env.ZeroSisUi.DispatchKeyDown(46) and env.Controls.NameBox:GetText()=='한 저장','Delete split Unicode scalar')
++check(env.ZeroSisUi.GetTextInputFocusToken()==editingToken,'Caret or Unicode edit changed editor lifetime')
+ replaceName(string.rep('가',32))
+ check(env.ZeroSisUi.DispatchTextInput(0xB098) and env.Controls.NameBox:GetText()==string.rep('가',32),'NameBox exceeded scalar maximum')
+ local longNameJson=json(snap())
+@@ -163,9 +174,13 @@
+ check(#requests==2 and requests[1].kind=='Save' and requests[1].name=='검증 저장' and requests[2].kind=='Close','Save/Close order changed')
+ local closed=snap();local closedJson=json(closed)
+ check(not closed.active and closed.timerSemaphore==0 and not closed.saveMenu.textInputEnabled,'Saved child did not release focus')
++check(closed.saveMenu.focusEpoch>named.saveMenu.focusEpoch and closed.saveMenu.textInputFocusToken==0 and
++ env.ZeroSisUi.GetTextInputFocusToken()==0,'Child close retained stale editor lifetime')
+ check(not env.ZeroSisUi.DispatchTextInput(0xAC00) and not env.ZeroSisUi.DispatchLeftClick(rows[1]),'Closed child accepted stale input')
+ env.ZeroSisUi.CloseSaveMenu();check(#requests==2,'Repeated host close requeued child close')
+-now=now+1;env.ZeroSisUi.OpenSaveMenu();check(env.ZeroSisUi.DispatchKeyDown(27),'Original Escape failed')
++now=now+1;env.ZeroSisUi.OpenSaveMenu()
++check(env.ZeroSisUi.GetTextInputFocusToken()>closed.saveMenu.focusEpoch,'Reopened child reused the prior editor token')
++check(env.ZeroSisUi.DispatchKeyDown(27),'Original Escape failed')
+ check(#requests==3 and requests[3].kind=='Close' and timerChanges==0,'Cancel submitted save or touched parent timer')
+ check(json(opened)==openedJson and json(named)==namedJson and json(closed)==closedJson,'Captured snapshots mutated')
+ return json({status='PASS_ORIGINAL_SAVE_MENU_COMPONENT',checks=checks,
+--- before_focus/Tests/test_save_menu_renderer.py
++++ after_focus/Tests/test_save_menu_renderer.py
+@@ -39,7 +39,7 @@
+         self.assertEqual(proof['catalog_rows'], 2)
+         self.assertFalse(proof['retail_pixels_verified'])
+         self.assertFalse(proof['native_save_load_verified'])
+-        for mode in ('source', 'length', 'caret', 'timer', 'cloud', 'target', 'parent', 'name'):
++        for mode in ('source', 'length', 'caret', 'timer', 'cloud', 'target', 'parent', 'name', 'focus_epoch', 'focus_token'):
+             changed = copy.deepcopy(original)
+             nodes = list(walk(changed['tree']))
+             name = next(row for row in nodes if row.get('id') == 'NameBox')
+@@ -50,6 +50,8 @@
+             elif mode == 'cloud': next(row for row in nodes if row.get('id') == 'CloudCheck')['disabled'] = False
+             elif mode == 'target': changed['inputTargets'].pop()
+             elif mode == 'parent': changed['saveMenu']['parentContext'] = 'Other'
++            elif mode == 'focus_epoch': changed['saveMenu']['focusEpoch'] = 0
++            elif mode == 'focus_token': changed['saveMenu']['textInputFocusToken'] += 1
+             else: changed['saveMenu']['name'] = 'Other'
+             with self.subTest(mode=mode), self.assertRaises(ValueError):
+                 save_menu_contract(changed)

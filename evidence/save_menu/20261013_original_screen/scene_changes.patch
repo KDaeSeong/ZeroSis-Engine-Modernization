@@ -1,0 +1,1242 @@
+--- before/Source/Host/UiScene.lua
++++ after/Source/Host/UiScene.lua
+@@ -21,6 +21,7 @@
+ local hasRetainedActionInfoUi = popupKind=='ActionInfoPanel'
+ local hasRetainedNotificationUi = popupKind=='NotificationPanel'
+ local hasRetainedGameMenuUi = popupKind=='GameMenu'
++local hasRetainedSaveMenuUi = popupKind=='SaveMenu'
+ local hasRetainedTradeRouteUi = popupKind=='TradeRoute'
+ local hasRetainedSocialPolicyUi = popupKind=='SocialPolicy'
+ local hasRetainedEconomicParentUi = popupKind=='EconomicOverview'
+@@ -28,7 +29,7 @@
+ local hasRetainedEconomicHappinessUi = popupKind=='EconomicHappiness'
+ local hasRetainedEconomicChildUi = hasRetainedEconomicGeneralUi or hasRetainedEconomicHappinessUi
+ local hasRetainedEconomicUi = hasRetainedEconomicParentUi or hasRetainedEconomicChildUi
+-local hasRetainedPopupUi = popupKind=='Production' or hasRetainedTechUi or hasRetainedTechAwardUi or hasRetainedTreeUi or hasRetainedCaptureUi or hasRetainedLeaderUi or hasRetainedCityUi or hasRetainedUnitUi or hasRetainedDeclareWarUi or hasRetainedTopPanelUi or hasRetainedActionInfoUi or hasRetainedNotificationUi or hasRetainedTradeRouteUi or hasRetainedSocialPolicyUi or hasRetainedEconomicUi or hasRetainedGameMenuUi
++local hasRetainedPopupUi = popupKind=='Production' or hasRetainedTechUi or hasRetainedTechAwardUi or hasRetainedTreeUi or hasRetainedCaptureUi or hasRetainedLeaderUi or hasRetainedCityUi or hasRetainedUnitUi or hasRetainedDeclareWarUi or hasRetainedTopPanelUi or hasRetainedActionInfoUi or hasRetainedNotificationUi or hasRetainedTradeRouteUi or hasRetainedSocialPolicyUi or hasRetainedEconomicUi or hasRetainedGameMenuUi or hasRetainedSaveMenuUi
+ local economicDynamicStacks = hasRetainedEconomicGeneralUi and
+   {MainStack=true,CityStack=true,TradeStack=true,BuildingsStack=true} or
+   hasRetainedEconomicHappinessUi and {LuxuryHappinessStack=true,CityBuildingStack=true,
+@@ -59,6 +60,9 @@
+ end
+ if hasRetainedGameMenuUi then
+   assert(contextName=='GameMenu','GameMenu context identity mismatch')
++end
++if hasRetainedSaveMenuUi then
++  assert(contextName=='SaveMenu','SaveMenu context identity mismatch')
+ end
+ local captureCityOverlay=false
+ local arrayType = {}
+@@ -81,6 +85,8 @@
+ local gameMenuUnavailable,gameMenuExitCursor
+ local gameMenuUnavailableAction,clearGameMenuNotice
+ local gameMenuRawMapScript,gameMenuDatabaseMapScript
++local focusedEditBox,saveMenuCurrent
++local saveMenuCanSave
+ local gameMenuChildren={LoadMenu='LoadMenu',SaveMenu='SaveMenu',SaveMapMenu='SaveMapMenu',
+   OptionsMenu_InGame='OptionsMenu',TouchControlsMenu='TouchControlsMenu'}
+ 
+@@ -281,9 +287,13 @@
+   return 0
+ end
+ local function measureProductionLabel(value,deferUnknownIcons)
+-  if not hasRetainedPopupUi or (value.kind~='Label' and value.kind~='TextButton') then return end
++  if not hasRetainedPopupUi or (value.kind~='Label' and value.kind~='TextButton' and
++    not (hasRetainedSaveMenuUi and value.kind=='EditBox')) then return end
+   local font,glyphs,all=productionFont(value.attributes.Font)
+-  local rows=expandLabelMetrics(value.label,all,glyphs,deferUnknownIcons,topPanelGoldColorDepth(value))
++  local rows
++  if value.kind=='EditBox' then
++    rows={};appendPlainMetrics(rows,value.label,glyphs,0)
++  else rows=expandLabelMetrics(value.label,all,glyphs,deferUnknownIcons,topPanelGoldColorDepth(value)) end
+   if not rows then
+     value.textMeasurementPending=true
+     return
+@@ -347,7 +357,7 @@
+ end
+ local function buttonKind(kind)
+   return kind=='Button' or kind=='GridButton' or kind=='TextButton' or kind=='DownButton' or kind=='UpButton' or
+-    ((hasRetainedCityUi or hasRetainedSocialPolicyUi) and (kind=='CheckBox' or kind=='RadioButton'))
++    ((hasRetainedCityUi or hasRetainedSocialPolicyUi or hasRetainedSaveMenuUi) and (kind=='CheckBox' or kind=='RadioButton'))
+ end
+ local function inheritedDisabled(handle)
+   while handle do
+@@ -716,9 +726,21 @@
+   if hasRetainedGameMenuUi and target.kind=='LuaContext' then
+     assert(gameMenuChildren[target.attributes.ID] and target.parent==root and #target.children==0,
+       'GameMenu requested an unregistered child context')
+-    if not value then gameMenuUnavailable(target.attributes.ID) end
++    if not value then
++      if target.attributes.ID=='SaveMenu' then native('saveMenuOpen')
++      else gameMenuUnavailable(target.attributes.ID) end
++    end
+     assert(target.hidden,'An unconnected GameMenu child became visible')
+     return
++  end
++  if hasRetainedSaveMenuUi then
++    if target.kind=='LuaContext' then
++      assert(target.attributes.ID=='SaveMapMenu' and target.parent==root and #target.children==0,
++        'SaveMenu requested an unregistered child context')
++      assert(value and target.hidden,'SaveMapMenu is not connected')
++      return
++    end
++    if target.attributes.ID=='SaveMapButton' or target.attributes.ID=='CloudCheck' then value=true end
+   end
+   if (hasRetainedTreeUi or hasRetainedSocialPolicyUi or hasRetainedNotificationUi) and target.hidden==value then return end
+   target.hidden=value
+@@ -729,7 +751,7 @@
+     -- Repeated SetHide(false) is the stock parent's intentional refresh signal.
+     native('economicChildHidden',target.attributes.ID,value)
+   end
+-  if hasRetainedTreeUi or hasRetainedTechUi or hasRetainedCityUi or hasRetainedSocialPolicyUi or hasRetainedEconomicUi or hasRetainedNotificationUi or hasRetainedGameMenuUi then layoutDirty=true end
++  if hasRetainedTreeUi or hasRetainedTechUi or hasRetainedCityUi or hasRetainedSocialPolicyUi or hasRetainedEconomicUi or hasRetainedNotificationUi or hasRetainedGameMenuUi or hasRetainedSaveMenuUi then layoutDirty=true end
+   if (hasRetainedTreeUi or hasRetainedTechUi or hasRetainedCityUi or hasRetainedSocialPolicyUi or hasRetainedEconomicUi or hasRetainedNotificationUi) and root then
+     local parentVisible,parentHover=parentActivation(self)
+     updateAnimations(self,parentVisible and not contextHidden,parentHover,frameTime())
+@@ -743,6 +765,11 @@
+   local target=state(self)
+   assert(buttonKind(target.kind),
+     'SetDisabled requires a button control')
++  if hasRetainedSaveMenuUi then
++    local id=target.attributes.ID
++    if id=='Delete' or id=='CloudCheck' or id=='SaveMapButton' or id=='Yes' then value=true
++    elseif id=='SaveButton' and not value then value=not saveMenuCanSave() end
++  end
+   target.disabled=value
+   target.attributes.Disabled=value and '1' or '0'
+ end
+@@ -752,6 +779,14 @@
+   -- numeric label input here; texture/tooltip identity contracts stay textual.
+   if type(value)=='number' then value=tostring(finite(value)) end
+   value=text(value)
++  if hasRetainedSaveMenuUi and target.kind=='EditBox' then
++    local chars=utf8Characters(value);local maximum=assert(tonumber(target.attributes.MaxLength))
++    assert(maximum==32 and target.attributes.CallOnChar=='1','NameBox source contract changed')
++    if #chars>maximum then
++      local limited={};for index=1,maximum do limited[index]=chars[index].character end
++      value=table.concat(limited)
++    end
++  end
+   local before=target.label;target.label=value
+   local ok,err=true,nil
+   if hasRetainedPopupUi then ok,err=pcall(measureProductionLabel,target) end
+@@ -770,6 +805,19 @@
+   end
+ end
+ function methods:SetText(value) setLabelText(state(self),value) end
++function methods:ClearString()
++  local target=state(self)
++  assert(hasRetainedSaveMenuUi and target.kind=='EditBox' and target.attributes.ID=='NameBox',
++    'ClearString requires the original SaveMenu NameBox')
++  setLabelText(target,'');target.caret=0
++end
++function methods:TakeFocus()
++  local target=state(self)
++  assert(hasRetainedSaveMenuUi and active and not contextHidden and timer==0 and
++    target.kind=='EditBox' and target.attributes.ID=='NameBox',
++    'TakeFocus requires the live original SaveMenu NameBox')
++  focusedEditBox=self;target.caret=#utf8Characters(target.label)
++end
+ function methods:SetString(value)
+   local target=state(self)
+   assert(hasRetainedSocialPolicyUi and target.kind=='Label',
+@@ -798,6 +846,12 @@
+   else target.label=text(localized) end
+ end
+ function methods:SetTexture(value) state(self).texture=text(value) end
++function methods:UnloadTexture()
++  local target=state(self)
++  assert(hasRetainedSaveMenuUi and target.kind=='Image' and target.attributes.ID=='LargeMapImage',
++    'UnloadTexture requires the original SaveMenu map image')
++  target.texture='';target.textureX=0;target.textureY=0
++end
+ function methods:SetTextureOffsetVal(x,y)
+   local value=state(self);value.textureX=finite(x);value.textureY=finite(y)
+ end
+@@ -941,8 +995,13 @@
+   layoutDirty=true
+ end
+ function methods:RegisterCallback(event,callback)
++  local value=state(self)
++  if hasRetainedSaveMenuUi and value.kind=='EditBox' then
++    assert(value.attributes.ID=='NameBox' and type(event)=='function' and callback==nil,
++      'NameBox callback requires the original one-function signature')
++    value.editCallback=event;return
++  end
+   assert(type(event)=='string' and type(callback)=='function', 'Invalid UI callback')
+-  local value=state(self)
+   assert(buttonKind(value.kind), 'This control does not support button callbacks')
+   assert(event==Mouse.eLClick or event==Mouse.eRClick or
+     hasRetainedNotificationUi and event==Mouse.eLDblClick, 'Unsupported mouse callback event')
+@@ -956,8 +1015,9 @@
+ end
+ function methods:SetCheck(checked)
+   local value=state(self)
+-  assert((hasRetainedCityUi or hasRetainedSocialPolicyUi) and (value.kind=='CheckBox' or value.kind=='RadioButton') and type(checked)=='boolean',
++  assert((hasRetainedCityUi or hasRetainedSocialPolicyUi or hasRetainedSaveMenuUi) and (value.kind=='CheckBox' or value.kind=='RadioButton') and type(checked)=='boolean',
+     'SetCheck requires a check/radio boolean')
++  if hasRetainedSaveMenuUi then assert(value.attributes.ID=='CloudCheck' and not checked,'Steam Cloud is not connected') end
+   if checked and value.kind=='RadioButton' then
+     local group=assert(value.attributes.RadioGroup,'RadioButton is missing its source group')
+     for _,other in pairs(states) do
+@@ -969,7 +1029,7 @@
+ function methods:IsChecked() return state(self).checked end
+ function methods:RegisterCheckHandler(callback)
+   local value=state(self)
+-  assert((hasRetainedCityUi or hasRetainedSocialPolicyUi) and (value.kind=='CheckBox' or value.kind=='RadioButton') and type(callback)=='function',
++  assert((hasRetainedCityUi or hasRetainedSocialPolicyUi or hasRetainedSaveMenuUi) and (value.kind=='CheckBox' or value.kind=='RadioButton') and type(callback)=='function',
+     'Check handler requires a checkbox or radio control')
+   value.checkHandler=callback
+   value.callbacks[Mouse.eLClick]=function()
+@@ -1192,7 +1252,7 @@
+     assert(measuredRows==2,'SocialPolicy pane must retain its original two horizontal policy rows')
+     methods.CalculateSize(rows)
+   end
+-  if (hasRetainedCityUi or hasRetainedEconomicUi or hasRetainedNotificationUi or hasRetainedGameMenuUi or hasRetainedTopPanelUi) and handle==root then
++  if (hasRetainedCityUi or hasRetainedEconomicUi or hasRetainedNotificationUi or hasRetainedGameMenuUi or hasRetainedSaveMenuUi or hasRetainedTopPanelUi) and handle==root then
+     -- Size-less stacks need their visible child extents before anchoring,
+     -- including GameMenu's button/icon rows and TopPanel's centered captions.
+     -- Measure from the leaves upward, then position the unchanged tree.
+@@ -1334,7 +1394,7 @@
+   end
+   for _,child in ipairs(value.children) do anchor(child) end
+   if handle==root then
+-    if hasRetainedCityUi or hasRetainedSocialPolicyUi or hasRetainedEconomicUi or hasRetainedNotificationUi then
++    if hasRetainedCityUi or hasRetainedSocialPolicyUi or hasRetainedEconomicUi or hasRetainedNotificationUi or hasRetainedSaveMenuUi then
+       for control,row in pairs(states) do
+         if row.kind=='ScrollPanel' then
+           measureScrollContent(control)
+@@ -1410,6 +1470,9 @@
+   end
+   if not ok then error(err,0) end
+   if hasRetainedGameMenuUi then clearGameMenuNotice() end
++  if hasRetainedSaveMenuUi and controls.SaveButton then
++    controls.SaveButton:SetDisabled(not saveMenuCanSave())
++  end
+   return true
+ end
+ 
+@@ -1542,6 +1605,7 @@
+ if hasRetainedGameMenuUi then
+   for _,name in pairs(gameMenuChildren) do PopupPriority[name]=name end
+ end
++if hasRetainedSaveMenuUi then PopupPriority.SaveMenu='SaveMenu';PopupPriority.SaveMapMenu='SaveMapMenu' end
+ if hasRetainedCaptureUi then
+   -- Explicitly select the installed BNW capture layout for this private VM.
+   -- Keep the stock pattern include and loaded script bytes unchanged.
+@@ -1678,7 +1742,7 @@
+   end
+ end
+ 
+-if hasRetainedGameMenuUi then
++if hasRetainedGameMenuUi or hasRetainedSaveMenuUi then
+   -- These adapters expose the SDK's actual setup state to unchanged GameMenu.
+   -- Gameplay mutations are only owned requests handled after Lua unwinds.
+   for method,selector in pairs({GetLeaderName='leaderName',
+@@ -1753,6 +1817,52 @@
+       'GameMenu requested a non-original gameplay control')
+     return gameMenuUnavailable(kind==ControlTypes.CONTROL_RESTART_GAME and 'Restart' or 'Retire')
+   end
++end
++
++if hasRetainedSaveMenuUi then
++  saveMenuCurrent=assert(native('saveMenuCurrent'),'SaveMenu requires its actual current SDK header')
++  assert(type(saveMenuCurrent)=='table' and GameTypes and GameTypes.GAME_SINGLE_PLAYER==0 and
++    GameTypes.GAME_NETWORK_MULTIPLAYER==1 and GameTypes.GAME_HOTSEAT_MULTIPLAYER==2 and
++    saveMenuCurrent.GameType==GameTypes.GAME_SINGLE_PLAYER,'SaveMenu requires the supported SDK single-player session')
++  PreGame.GameStarted=function() return true end
++  PreGame.IsMultiplayerGame=function() return false end
++  PreGame.IsHotSeatGame=function() return false end
++  for method,field in pairs({GetCivilization='PlayerCivilization',GetGameSpeed='GameSpeed',
++    GetEra='StartEra',GetHandicap='Difficulty',GetWorldSize='WorldSize',GetMapScript='MapScript',
++    GetLeaderName='LeaderName',GetCivilizationDescription='CivilizationName'}) do
++    local key=field;PreGame[method]=function() return saveMenuCurrent[key] end
++  end
++  PreGame.GetGameType=function() return saveMenuCurrent.GameType end
++  PreGame.GetFileHeader=function(path) return native('saveMenuHeader',text(path)) end
++  Steam={GetMaxCloudSaves=function() return 0 end,
++    GetCloudSaves=function() error('Steam Cloud is not connected') end,
++    SaveGameToCloud=function() error('Steam Cloud is not connected') end,
++    CopyLastAutoSaveToSteamCloud=function() error('Steam Cloud is not connected') end}
++  saveMenuCanSave=function()
++    if not active or contextHidden or inputContextName~=contextName or timer~=0 or not controls.NameBox then return false end
++    local name=controls.NameBox:GetText()
++    if type(ValidateText)~='function' or not ValidateText(name) or #utf8Characters(name)>32 then return false end
++    local available=native('saveMenuNameAvailable',name)
++    assert(type(available)=='boolean','SaveMenu name availability must be a boolean')
++    return available
++  end
++  UI.SaveFileList=function(files,gameType,automatic,includeCustom)
++    assert(type(files)=='table' and next(files)==nil and gameType==GameTypes.GAME_SINGLE_PLAYER and
++      automatic==false and includeCustom==true,'SaveFileList requires the original single-player tuple')
++    local paths=native('saveMenuFiles');assert(type(paths)=='table','SaveMenu file catalog must be an array')
++    local count=0;for key,path in pairs(paths) do
++      assert(type(key)=='number' and key==math.floor(key) and key>=1 and type(path)=='string' and path~='',
++        'SaveMenu catalog has an invalid path row');count=count+1
++    end
++    for index=1,count do files[index]=text(assert(paths[index],'SaveMenu catalog must be contiguous')) end
++  end
++  UI.GetSavedGameModificationTime=function(path) return text(native('saveMenuModificationTime',text(path))) end
++  UI.SaveGame=function(name)
++    assert(saveMenuCanSave() and name==controls.NameBox:GetText(),'SaveGame requires a new validated NameBox value')
++    return native('saveMenuSave',text(name))
++  end
++  UI.DeleteSavedGame=function() error('Deleting saved games is not connected') end
++  UI.CopyLastAutoSave=function() error('Multiplayer saves are not connected') end
+ end
+ 
+ function context:SetUpdate(callback)
+@@ -1875,8 +1985,10 @@
+     assert(target.kind=='LuaContext' and target.parent==root and expected and
+       priority==PopupPriority[expected] and target.hidden and #target.children==0,
+       'GameMenu child popup request differs from its original declaration')
++    if target.attributes.ID=='SaveMenu' then return native('saveMenuOpen') end
+     return gameMenuUnavailable(target.attributes.ID)
+   end
++  if hasRetainedSaveMenuUi and ctx~=context then error('SaveMapMenu is not connected') end
+   if hasRetainedCaptureUi and ctx==controls.EmptyPopup then
+     assert(active and not captureCityOverlay and priority==PopupPriority.GenericPopup+1,
+       'Captured-city viewing barrier has an invalid priority or lifetime')
+@@ -1894,7 +2006,8 @@
+     (hasRetainedTradeRouteUi and (priority==PopupPriority.SocialPolicy or priority==PopupPriority.InGameUtmost)) or
+     (hasRetainedSocialPolicyUi and (priority==PopupPriority.SocialPolicy or priority==PopupPriority.InGameUtmost)) or
+     (hasRetainedEconomicParentUi and (priority==PopupPriority.EconOverview or priority==PopupPriority.InGameUtmost)) or
+-    (hasRetainedGameMenuUi and priority==PopupPriority.InGameMenu))
++    (hasRetainedGameMenuUi and priority==PopupPriority.InGameMenu) or
++    (hasRetainedSaveMenuUi and priority==PopupPriority.SaveMenu))
+   assert(allowed, 'Unsupported popup queue request')
+   assert(not active and (showHide or hasRetainedCaptureUi), 'Popup already shown or handler missing')
+   active=true;contextHidden=false;inputContextName=contextName;lifecycle[#lifecycle+1]='queued'
+@@ -1915,7 +2028,16 @@
+   if hasRetainedPopupUi or hasRetainedLeaderUi then updateAnimations(root,false,true,frameTime()) end
+   if showHide then showHide(true,false) end
+   active=false;contextHidden=true;inputContextName=nil;lifecycle[#lifecycle+1]='closed'
++  if hasRetainedSaveMenuUi then focusedEditBox=nil;native('saveMenuClose') end
+   if hasRetainedTreeUi or hasRetainedCaptureUi then researchProcessedPending=true end
++end
++function UIManager:IsModal(ctx)
++  assert(hasRetainedSaveMenuUi and ctx==context,'IsModal requires the original SaveMenu context')
++  return true
++end
++function UIManager:PopModal(ctx)
++  assert(hasRetainedSaveMenuUi and ctx==context,'PopModal requires the original SaveMenu context')
++  return self:DequeuePopup(ctx)
+ end
+ function UIManager:GetScreenSizeVal()
+   -- The host contract is a logical viewport, not the physical monitor size.
+@@ -2020,6 +2142,11 @@
+   if value.worldPosition then result.worldPosition=value.worldPosition end
+   if value.worldGrid then result.worldGrid=value.worldGrid end
+   if value.instanceTemplate then result.instanceTemplate=value.instanceTemplate end
++  if hasRetainedSaveMenuUi and value.kind=='EditBox' then
++    result.focused=focusedEditBox==handle;result.caretCodepoint=clamp(value.caret or 0,0,#utf8Characters(value.label))
++    result.maxLength=tonumber(value.attributes.MaxLength)
++    result.textInputPolicy='UNICODE_SCALAR_INSERT_AT_CARET_MAX32_LITERAL_TEXT'
++  end
+   if value.styleChildSource then result.styleChildSource=value.styleChildSource end
+   if (hasRetainedCityUi or hasRetainedDeclareWarUi or hasRetainedNotificationUi) and value.kind=='FlipAnim' then
+     local frames=assert(tonumber(value.attributes.FrameCount),'FlipAnim lacks FrameCount')
+@@ -2055,7 +2182,7 @@
+       result.buttonState=value.buttonState
+     end
+     if value.textMeasurementPending then result.textMetricsPending=true end
+-    if (value.kind=='Label' or value.kind=='TextButton') and not value.hidden and
++    if (value.kind=='Label' or value.kind=='TextButton' or hasRetainedSaveMenuUi and value.kind=='EditBox') and not value.hidden and
+        (not hasRetainedDeclareWarUi or visible) then
+       assert(value.textLines and value.fontMetricSource,
+         'Popup label lacks measured GGXML layout: '..tostring(value.attributes.ID or value.key))
+@@ -2172,8 +2299,9 @@
+ -- original paint order (notably the touch-help button).
+ -- The optional input addendum shares this helper in the same Lua chunk.
+ local function gameMenuInputAllowed(handle)
+-  if not hasRetainedGameMenuUi then return true end
+-  local confirmation=assert(controls.ExitConfirm,'Original GameMenu confirmation is missing')
++  if not hasRetainedGameMenuUi and not hasRetainedSaveMenuUi then return true end
++  local confirmation=assert(hasRetainedSaveMenuUi and controls.DeleteConfirm or controls.ExitConfirm,
++    'Original menu confirmation is missing')
+   if state(confirmation).hidden then return true end
+   local parent=assert(state(confirmation).parent,'Original GameMenu confirmation has no parent')
+   while handle do
+@@ -2239,7 +2367,7 @@
+   if hasRetainedNotificationUi then
+     return value.kind=='Container' and value.sourceAttributes.ConsumeMouseButton=='1'
+   end
+-  return (hasRetainedUnitUi or hasRetainedTopPanelUi or hasRetainedActionInfoUi or hasRetainedGameMenuUi) and
++  return (hasRetainedUnitUi or hasRetainedTopPanelUi or hasRetainedActionInfoUi or hasRetainedGameMenuUi or hasRetainedSaveMenuUi) and
+     (value.attributes.ConsumeMouse=='1' or value.attributes.ConsumeMouse=='true' or value.attributes.ConsumeMouse=='True')
+ end
+ local function captureInputTargets(includeConsumeOverlaps)
+@@ -2251,10 +2379,10 @@
+     if value.kind=='ShowOnMouseOver' then hoverVisible=hoverVisible and value.hovered end
+     if value.kind=='HideOnMouseOver' then hoverVisible=hoverVisible and not value.hovered end
+     local leftClickAdded=false
+-    if buttonKind(value.kind) and gameMenuInputAllowed(handle) then
++    if (buttonKind(value.kind) or hasRetainedSaveMenuUi and value.kind=='EditBox') and gameMenuInputAllowed(handle) then
+       local disabled=inheritedDisabled(handle)
+       for _,eventName in ipairs({Mouse.eLClick,Mouse.eRClick}) do
+-        if type(value.callbacks[eventName])=='function' and not disabled and hoverVisible then
++        if (type(value.callbacks[eventName])=='function' or value.kind=='EditBox' and eventName==Mouse.eLClick) and not disabled and hoverVisible then
+           local clipped=clippedTargetBounds(value,clips)
+           if clipped then
+             result[#result+1]={key=value.key,id=value.attributes.ID or '',event=eventName,
+@@ -2286,6 +2414,24 @@
+   return result
+ end
+ ZeroSisUi={
++  OpenSaveMenu=function()
++    assert(hasRetainedSaveMenuUi and not active and contextHidden and timer==0,
++      'SaveMenu open requires its inactive original context')
++    assert(type(OnBack)=='function' and type(ShowHideHandler)=='function','Original SaveMenu lifecycle is missing')
++    draws=array();lifecycle=array()
++    UIManager:QueuePopup(context,PopupPriority.SaveMenu)
++    for _,id in ipairs({'Delete','CloudCheck','SaveMapButton','Yes'}) do controls[id]:SetDisabled(true) end
++    controls.SaveMapButton:SetHide(true)
++    controls.CloudCheck:SetHide(true)
++    controls.SaveButton:SetDisabled(not saveMenuCanSave())
++    assert(active and not contextHidden and timer==0,'Original SaveMenu did not enter with the parent timer untouched')
++  end,
++  CloseSaveMenu=function()
++    assert(hasRetainedSaveMenuUi,'SaveMenu close requires its original context')
++    if not active then assert(timer==0,'Inactive SaveMenu owns a timer');return end
++    assert(type(OnBack)=='function','Original SaveMenu OnBack is missing');OnBack()
++    assert(not active and contextHidden and timer==0 and focusedEditBox==nil,'Original SaveMenu did not leave')
++  end,
+   OpenGameMenu=function()
+     assert(hasRetainedGameMenuUi and not active and contextHidden and timer==0,
+       'GameMenu open requires its inactive original context')
+@@ -2631,6 +2777,22 @@
+       metadata.rawMapScript=gameMenuRawMapScript;metadata.databaseMapScript=gameMenuDatabaseMapScript
+       snapshot.gameMenu=metadata;snapshot.contextHidden=contextHidden
+     end
++    if hasRetainedSaveMenuUi then
++      local provenance=assert(layout.saveMenu,'SaveMenu source provenance is required')
++      local metadata={};for key,value in pairs(provenance) do metadata[key]=value end
++      local name=state(assert(controls.NameBox))
++      metadata.owner=Game.GetActivePlayer();metadata.turn=Game.GetGameTurn()
++      metadata.modal=true;metadata.timerSemaphore=timer;metadata.parentContext='GameMenu'
++      metadata.focusKey=focusedEditBox and state(focusedEditBox).key or 0
++      metadata.textInputEnabled=active and not contextHidden and inputContextName==contextName and
++        focusedEditBox~=nil and gameMenuInputAllowed(focusedEditBox) and not inheritedDisabled(focusedEditBox)
++      metadata.name=name.label;metadata.nameAvailable=saveMenuCanSave()
++      metadata.catalogCount=type(g_SavedGames)=='table' and #g_SavedGames or 0
++      metadata.retailTextEditingVerified=false
++      metadata.cloudCheckGeometryVerified=false
++      metadata.unsupportedCloudCheckHidden=true
++      snapshot.saveMenu=metadata;snapshot.contextHidden=contextHidden
++    end
+     if hasRetainedTradeRouteUi then
+       local provenance=assert(layout.tradeRoute,'TradeRoute source provenance is required')
+       local stack=state(assert(controls.MainStack,'TradeRoute MainStack control is missing'))
+@@ -2715,6 +2877,8 @@
+     local before=native('randomSeed')
+     if hasRetainedGameMenuUi then
+       ZeroSisUi.CloseGameMenu()
++    elseif hasRetainedSaveMenuUi then
++      ZeroSisUi.CloseSaveMenu()
+     elseif hasRetainedCityUi then
+       -- A host/window close means leave the city. Stock Escape in purchase
+       -- mode only cancels that mode, so use the stock full-exit event here.
+--- before/Source/Presentation/UiPresentationInput.lua
++++ after/Source/Presentation/UiPresentationInput.lua
+@@ -13,6 +13,7 @@
+   if popupKind=='NotificationPanel' then return contextName=='NotificationPanel' and timer==0 end
+   if popupKind=='ResearchTree' then return contextName=='TechTree' and timer==1 end
+   if hasRetainedEconomicChildUi then return timer==0 end
++  if hasRetainedSaveMenuUi then return contextName=='SaveMenu' and timer==0 end
+   return timer==1 or ((popupKind=='Production' or popupKind=='Research' or popupKind=='CityCapture' or popupKind=='LeaderHead' or popupKind=='CityView' or popupKind=='UnitPanel') and timer==0)
+ end
+ 
+@@ -21,7 +22,7 @@
+ end
+ 
+ local function flushRetainedInputLayout()
+-  if isResearchTreeContext() or (popupKind=='SocialPolicy' and contextName=='SocialPolicyPopup') or hasRetainedEconomicUi or hasRetainedActionInfoUi or hasRetainedNotificationUi or hasRetainedGameMenuUi then
++  if isResearchTreeContext() or (popupKind=='SocialPolicy' and contextName=='SocialPolicyPopup') or hasRetainedEconomicUi or hasRetainedActionInfoUi or hasRetainedNotificationUi or hasRetainedGameMenuUi or hasRetainedSaveMenuUi then
+     assert(type(ZeroSisUi.FlushLayout)=='function','Retained input layout barrier is unavailable')
+     ZeroSisUi.FlushLayout()
+   end
+@@ -44,8 +45,10 @@
+ end
+ 
+ local function isLeftInputTarget(handle,value)
+-  if not value or not buttonKind(value.kind) or inheritedDisabled(handle) or
+-    type(value.callbacks[Mouse.eLClick])~='function' then return false end
++  if not value or inheritedDisabled(handle) then return false end
++  if hasRetainedSaveMenuUi and value.kind=='EditBox' then
++    if value.attributes.ID~='NameBox' or type(value.editCallback)~='function' then return false end
++  elseif not buttonKind(value.kind) or type(value.callbacks[Mouse.eLClick])~='function' then return false end
+   local left,top,right,bottom=value.x,value.y,value.x+value.w,value.y+value.h
+   local parent=value.parent
+   while parent do
+@@ -60,10 +63,73 @@
+   return true
+ end
+ 
++local function liveEditBox()
++  if not hasRetainedSaveMenuUi or not inputEnabled() or not focusedEditBox then return nil end
++  local value=states[focusedEditBox]
++  if not value or value.kind~='EditBox' or value.attributes.ID~='NameBox' or
++    inheritedDisabled(focusedEditBox) or not gameMenuInputAllowed(focusedEditBox) then return nil end
++  local handle=findLiveControl(root,value.key,true)
++  if handle~=focusedEditBox or type(value.editCallback)~='function' then return nil end
++  return value
++end
++
++function ZeroSisUi.IsTextInputEnabled()
++  return liveEditBox()~=nil
++end
++
++local function notifyEditBox(value,isEnter)
++  local ok,err=pcall(value.editCallback,value.void1,value.void2,isEnter)
++  if not ok then error(err,0) end
++  if active then controls.SaveButton:SetDisabled(not saveMenuCanSave()) end
++  flushRetainedInputLayout()
++  return true
++end
++
++local function replaceEditBox(value,chars,caret)
++  local parts={};for _,item in ipairs(chars) do parts[#parts+1]=item.character end
++  setLabelText(value,table.concat(parts));value.caret=caret
++  return notifyEditBox(value,false)
++end
++
++local function editBoxKey(key)
++  local value=liveEditBox();if not value then return false end
++  local chars=utf8Characters(value.label);local caret=math.max(0,math.min(#chars,value.caret or #chars))
++  if key==Keys.VK_RETURN then
++    if not saveMenuCanSave() then return true end
++    return notifyEditBox(value,true)
++  elseif key==8 then
++    if caret==0 then return true end
++    table.remove(chars,caret);return replaceEditBox(value,chars,caret-1)
++  elseif key==46 then
++    if caret==#chars then return true end
++    table.remove(chars,caret+1);return replaceEditBox(value,chars,caret)
++  elseif key==37 then value.caret=math.max(0,caret-1)
++  elseif key==39 then value.caret=math.min(#chars,caret+1)
++  elseif key==36 then value.caret=0
++  elseif key==35 then value.caret=#chars
++  else return false end
++  return true
++end
++
++function ZeroSisUi.DispatchTextInput(scalar)
++  if not validInputInteger(scalar) or scalar<0x20 or scalar>0x10FFFF or
++    scalar>=0x7F and scalar<=0x9F or scalar>=0xD800 and scalar<=0xDFFF then return false end
++  local value=liveEditBox();if not value then return false end
++  local chars=utf8Characters(value.label);local maximum=tonumber(value.attributes.MaxLength)
++  if #chars>=maximum then return true end
++  -- Unsupported glyphs are rejected before changing the retained name. This
++  -- preserves exact source font metrics instead of rendering invented glyphs.
++  local _,glyphs=productionFont(value.attributes.Font)
++  if not glyphs[scalar] then return false end
++  local caret=math.max(0,math.min(#chars,value.caret or #chars))
++  table.insert(chars,caret+1,{codepoint=scalar,character=utf8Codepoint(scalar)})
++  return replaceEditBox(value,chars,caret+1)
++end
++
+ function ZeroSisUi.DispatchKeyDown(key)
+-  if not validInputInteger(key) or (key~=Keys.VK_ESCAPE and key~=Keys.VK_RETURN) then
+-    return false
+-  end
++  if not validInputInteger(key) then return false end
++  if hasRetainedSaveMenuUi and key~=Keys.VK_ESCAPE and editBoxKey(key) then return true end
++  if key~=Keys.VK_ESCAPE and key~=Keys.VK_RETURN then return false end
+   if not inputEnabled() or type(inputHandler)~='function' then return false end
+   return inputHandler(KeyEvents.KeyDown,key,0)==true
+ end
+@@ -77,6 +143,11 @@
+   flushRetainedInputLayout()
+   local handle,value=findLiveControl(root,controlKey,true)
+   if not handle or not value or inheritedDisabled(handle) or not gameMenuInputAllowed(handle) then return false end
++  if hasRetainedSaveMenuUi and value.kind=='EditBox' then
++    if eventName~=Mouse.eLClick or not isLeftInputTarget(handle,value) then return false end
++    handle:TakeFocus();return true
++  end
++  if hasRetainedSaveMenuUi and eventName==Mouse.eLClick then focusedEditBox=nil end
+   local consumed=invokeCallback(handle,eventName)
+   flushRetainedInputLayout()
+   return consumed
+@@ -93,11 +164,11 @@
+     local handle,value=findLiveControl(root,target,true)
+     if not handle or not gameMenuInputAllowed(handle) then return false end
+     if not isLeftInputTarget(handle,value) then
+-      if not hasRetainedGameMenuUi or not consumesMouse(value) then return false end
++      if not hasRetainedGameMenuUi and not hasRetainedSaveMenuUi or not consumesMouse(value) then return false end
+       target=nil
+     end
+   end
+-  local now=(popupKind=='Production' or popupKind=='Research' or popupKind=='TechAward' or popupKind=='CityCapture' or popupKind=='LeaderHead' or popupKind=='CityView' or popupKind=='TopPanel' or popupKind=='ActionInfoPanel' or popupKind=='NotificationPanel' or isResearchTreeContext() or hasRetainedEconomicUi or hasRetainedGameMenuUi) and frameTime() or 0
++  local now=(popupKind=='Production' or popupKind=='Research' or popupKind=='TechAward' or popupKind=='CityCapture' or popupKind=='LeaderHead' or popupKind=='CityView' or popupKind=='TopPanel' or popupKind=='ActionInfoPanel' or popupKind=='NotificationPanel' or isResearchTreeContext() or hasRetainedEconomicUi or hasRetainedGameMenuUi or hasRetainedSaveMenuUi) and frameTime() or 0
+   setHoveredControl(target,now)
+   if popupKind=='TopPanel' then activeTopPanelTooltip=nil end
+   return true
+@@ -138,7 +209,7 @@
+   local result={}
+   if not inputEnabled() then return result end
+   flushRetainedInputLayout()
+-  if popupKind=='UnitPanel' or popupKind=='TopPanel' or popupKind=='ActionInfoPanel' or popupKind=='NotificationPanel' or hasRetainedGameMenuUi then
++  if popupKind=='UnitPanel' or popupKind=='TopPanel' or popupKind=='ActionInfoPanel' or popupKind=='NotificationPanel' or hasRetainedGameMenuUi or hasRetainedSaveMenuUi then
+     local captured=captureInputTargets()
+     local leftKeys={}
+     for _,target in ipairs(captured) do
+--- before/tools/prepare_ui_popup_assets.py
++++ after/tools/prepare_ui_popup_assets.py
+@@ -19,6 +19,9 @@
+ GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Sid Meier's Civilization V")
+ GAME_MENU_LUA = 'Assets/UI/InGame/Menus/GameMenu.lua'
+ GAME_MENU_XML = 'Assets/DLC/Expansion2/UI/InGame/Menus/GameMenu.xml'
++SAVE_MENU_LUA = 'Assets/UI/InGame/Menus/SaveMenu.lua'
++SAVE_MENU_XML = 'Assets/UI/InGame/Menus/SaveMenu.xml'
++UNIQUE_BONUSES_LUA = 'Assets/UI/FrontEnd/GameSetup/UniqueBonuses.lua'
+ MAP_UTILITIES_LUA = 'Assets/Gameplay/Lua/MapUtilities.lua'
+ SCRIPTS = (
+     ('InstanceManager', 'Assets/UI/InstanceManager.lua'),
+@@ -55,6 +58,8 @@
+     # BNW inherits the base GameMenu Lua and supplies its Expansion2 layout.
+     ('MapUtilities', MAP_UTILITIES_LUA),
+     ('GameMenu', GAME_MENU_LUA),
++    ('UniqueBonuses', UNIQUE_BONUSES_LUA),
++    ('SaveMenu', SAVE_MENU_LUA),
+ )
+ XML = 'Assets/DLC/Expansion2/UI/InGame/Popups/WhosWinningPopup.xml'
+ DECLARE_WAR_XML = 'Assets/DLC/Expansion2/UI/InGame/Popups/DeclareWarPopup.xml'
+@@ -81,6 +86,7 @@
+     ('ActionInfoPanelLayout', 'Assets/DLC/Expansion2/UI/InGame/WorldView/ActionInfoPanel.xml', 'ActionInfoPanel'),
+     ('NotificationPanelLayout', 'Assets/DLC/Expansion2/UI/InGame/WorldView/NotificationPanel.xml', 'NotificationPanel'),
+     ('GameMenuLayout', GAME_MENU_XML, 'GameMenu'),
++    ('SaveMenuLayout', SAVE_MENU_XML, 'SaveMenu'),
+ )
+ SOURCE_ASSETS = (
+     ('DiscussionDialog', 'Assets/DLC/Expansion2/UI/InGame/LeaderHead/DiscussionDialog.lua'),
+@@ -91,7 +97,7 @@
+ KINDS = {'Context', 'Instance', 'Box', 'Image', 'Label', 'Grid', 'ScrollPanel',
+          'Stack', 'ScrollBar', 'GridButton', 'Button', 'Container', 'AlphaAnim',
+          'DownButton', 'UpButton', 'Meter', 'ScrollAnim', 'ShowOnMouseOver', 'HideOnMouseOver', 'TextureBar', 'GridData',
+-         'TextButton', 'LuaContext', 'CheckBox', 'RadioButton', 'WorldAnchor', 'FlipAnim', 'SlideAnim', 'Bar'}
++         'TextButton', 'LuaContext', 'CheckBox', 'RadioButton', 'WorldAnchor', 'FlipAnim', 'SlideAnim', 'Bar', 'EditBox'}
+ 
+ ICON_MAPPING_FILES = (
+     'Assets/Gameplay/XML/GameInfo/CIV5IconFontMapping.xml',
+@@ -285,6 +291,46 @@
+         'quickSavePolicy': 'ORIGINAL_ON_RETURN_THEN_UI_QUICK_SAVE_REQUIRES_NATIVE_DISPATCH',
+         'originalButtonVisibilityPreserved': True,
+         'childContextsRuntimeVerified': False,
++        'retailLayoutVerified': False,
++    }
++    return tree
++
++
++def save_menu_control_tree(element):
++    """Retain the complete original screen; its map child stays unconnected."""
++    tree = control_tree(element)
++    original_tree = control_tree(ET.parse(GAME / SAVE_MENU_XML).getroot())
++    if tree != original_tree:
++        raise ValueError('SaveMenu must retain every original XML node, attribute, and child order')
++    nodes = list(_walk_control_tree(tree))
++    templates = [node['attributes'].get('Name') for node in tree['children']
++                 if node['kind'] == 'Instance']
++    declarations = [node for node in nodes if node['kind'] == 'LuaContext']
++    expected_child = {'FileName': 'Assets/UI/InGame/Menus/SaveMapMenu',
++                      'ID': 'SaveMapMenu', 'Hidden': 'True'}
++    editors = [node for node in nodes if node['kind'] == 'EditBox']
++    if (element.tag != 'Context' or templates != ['LoadButton'] or
++            len(declarations) != 1 or declarations[0]['attributes'] != expected_child or
++            declarations[0]['children'] or declarations[0] not in tree['children'] or
++            len(editors) != 1 or editors[0]['attributes'].get('ID') != 'NameBox' or
++            editors[0]['attributes'].get('CallOnChar') != '1' or
++            editors[0]['attributes'].get('MaxLength') != '32'):
++        raise ValueError('SaveMenu original child, list template, or NameBox contract changed')
++    tree['saveMenu'] = {
++        'originalLua': artifact(GAME / SAVE_MENU_LUA),
++        'originalXml': artifact(GAME / SAVE_MENU_XML),
++        'originalUniqueBonusesLua': artifact(GAME / UNIQUE_BONUSES_LUA),
++        'instanceNames': templates,
++        'retainedControlCount': len(nodes),
++        'includeNames': ['InstanceManager', 'IconSupport', 'SupportFunctions',
++                         'UniqueBonuses', 'MapUtilities'],
++        'unconnectedLuaContexts': [declarations[0]],
++        'parentContext': 'GameMenu',
++        'timerSemaphorePolicy': 'PARENT_GAME_MENU_RETAINS_ONE_CHILD_OWNS_ZERO',
++        'catalogScope': 'CURRENT_ENGINE_SESSION_NATIVE_ZSSAVE_ONLY',
++        'unsupportedActions': ['overwrite', 'delete', 'cloud', 'saveMap'],
++        'nameBoxPolicy': 'ORIGINAL_MAX_LENGTH_32_UNICODE_SCALARS',
++        'sourceBytesPreserved': True,
+         'retailLayoutVerified': False,
+     }
+     return tree
+@@ -1231,6 +1277,12 @@
+     game_menu_assets = city_assets
+     game_menu_texture_assets = [game_menu_assets.resolve(name, root / 'game_menu_controls')
+                                for name in game_menu_texture_names_list]
++    save_menu_tree = save_menu_control_tree(ET.parse(GAME / SAVE_MENU_XML).getroot())
++    save_menu_styles = production_style_defaults(snapshots, save_menu_tree)
++    save_menu_tree['styleDefaults'] = save_menu_styles['controls']
++    save_menu_texture_names_list = game_menu_texture_names(save_menu_tree)
++    save_menu_texture_assets = [game_menu_assets.resolve(name, root / 'save_menu_controls')
++                               for name in save_menu_texture_names_list]
+     rows = []
+     texts = []
+     layout_metadata = {name: kind for name, _, kind in LAYOUTS}
+@@ -1259,6 +1311,7 @@
+                     else action_info_panel_control_tree(source_root) if name == 'ActionInfoPanelLayout'
+                     else notification_panel_control_tree(source_root) if name == 'NotificationPanelLayout'
+                     else game_menu_control_tree(source_root) if name == 'GameMenuLayout'
++                    else save_menu_control_tree(source_root) if name == 'SaveMenuLayout'
+                     else declare_war_control_tree(source_root) if name == 'DeclareWarLayout'
+                     else trade_route_control_tree(source_root) if name == 'TradeRouteLayout'
+                     else social_policy_control_tree(source_root) if name == 'SocialPolicyLayout'
+@@ -1288,6 +1341,7 @@
+                     'ActionInfoPanelLayout': 'ActionInfoPanel',
+                     'NotificationPanelLayout': 'NotificationPanel',
+                     'GameMenuLayout': 'GameMenu',
++                    'SaveMenuLayout': 'SaveMenu',
+                 }[name]
+                 tree['popupKind'] = kind
+                 if name == 'DeclareWarLayout':
+@@ -1328,7 +1382,7 @@
+                     }
+                 elif name == 'CityViewLayout':
+                     tree['layoutVariant'] = 'default'
+-            if kind in ('CityCapture', 'Production', 'Research', 'ResearchTree', 'TechAward', 'LeaderHead', 'CityView', 'UnitPanel', 'DeclareWar', 'TopPanel', 'TradeRoute', 'SocialPolicy', 'EconomicOverview', 'EconomicGeneral', 'EconomicHappiness', 'ActionInfoPanel', 'NotificationPanel', 'GameMenu'):
++            if kind in ('CityCapture', 'Production', 'Research', 'ResearchTree', 'TechAward', 'LeaderHead', 'CityView', 'UnitPanel', 'DeclareWar', 'TopPanel', 'TradeRoute', 'SocialPolicy', 'EconomicOverview', 'EconomicGeneral', 'EconomicHappiness', 'ActionInfoPanel', 'NotificationPanel', 'GameMenu', 'SaveMenu'):
+                 style_defaults = production_style_defaults(snapshots, tree)
+                 tree['styleDefaults'] = style_defaults['controls']
+                 tree['styleDefaultsSource'] = style_defaults['source']
+@@ -1531,6 +1585,13 @@
+                             'control_textures': game_menu_texture_assets,
+                             'control_texture_source_packs': game_menu_assets.pack_records,
+                             **trees['GameMenuLayout']['gameMenu']},
++              'save_menu': {'layout_asset': 'SaveMenuLayout', 'lua_asset': 'SaveMenu',
++                            'unique_bonuses_asset': 'UniqueBonuses',
++                            'sourceBytesPreserved': True, 'rendererVerified': False,
++                            'control_texture_names': save_menu_texture_names_list,
++                            'control_textures': save_menu_texture_assets,
++                            'control_texture_source_packs': game_menu_assets.pack_records,
++                            **trees['SaveMenuLayout']['saveMenu']},
+               'declare_war_policy': {
+                   'context_kind': 'DeclareWar', 'layout_script': 'DeclareWarLayout',
+                   'context_name': 'DeclareWarPopup', 'context_key': 'declare-war',
+--- before/tools/ui_pixel_scene.py
++++ after/tools/ui_pixel_scene.py
+@@ -40,7 +40,7 @@
+ KINDS = {'Context', 'Instance', 'AlphaAnim', 'Box', 'Button', 'Container', 'DownButton',
+          'Grid', 'GridButton', 'Image', 'Label', 'Meter', 'ScrollAnim', 'ScrollBar',
+          'ScrollPanel', 'ShowOnMouseOver', 'HideOnMouseOver', 'Stack', 'TextureBar', 'UpButton', 'TextButton', 'LuaContext',
+-         'CheckBox', 'RadioButton', 'WorldAnchor', 'FlipAnim', 'SlideAnim', 'Bar'}
++         'CheckBox', 'RadioButton', 'WorldAnchor', 'FlipAnim', 'SlideAnim', 'Bar', 'EditBox'}
+ # BUTTONPOPUP_CHOOSETECH is ordinal 11 in Source/SDK_BNW_x64/CvGameCoreDLLUtil/include/CvEnums.h.
+ RESEARCH_POPUP_ENUM_VALUE = 11
+ # BUTTONPOPUP_TECH_TREE is ordinal 67 in the same SDK enum.
+@@ -55,8 +55,128 @@
+ LEADERHEAD_ANIM_INTRO_ENUM_VALUE = 1
+ # LEADERHEAD_ANIM_ATTACKED is explicitly 6 in the frozen BNW CvEnums.h.
+ LEADERHEAD_ANIM_ATTACKED_ENUM_VALUE = 6
+-SCENE_CONTEXTS = ('production', 'research', 'research-tree', 'tech-award', 'city-capture', 'diplomacy', 'city-view', 'unit-panel', 'declare-war', 'top-panel', 'trade-route', 'social-policy', 'economic-overview', 'action-info-panel', 'notification-panel', 'game-menu')
++SCENE_CONTEXTS = ('production', 'research', 'research-tree', 'tech-award', 'city-capture', 'diplomacy', 'city-view', 'unit-panel', 'declare-war', 'top-panel', 'trade-route', 'social-policy', 'economic-overview', 'action-info-panel', 'notification-panel', 'game-menu', 'save-menu')
+ RESEARCH_CONTEXTS = ('research', 'research-tree')
++
++
++def save_menu_contract(snapshot, sources=None, *, closed=False):
++    """Verify the unchanged stock child screen and its bounded native adapters."""
++    require(type(snapshot) is dict and
++            (snapshot.get('contextName'), snapshot.get('popupKind')) == ('SaveMenu', 'SaveMenu') and
++            snapshot.get('active') is (not closed) and type(snapshot.get('timerSemaphore')) is int and
++            snapshot['timerSemaphore'] == 0 and
++            snapshot.get('lifecycle') == (['queued', 'closed'] if closed else ['queued']),
++            'SaveMenu must retain its child lifecycle without owning the parent timer')
++    menu = snapshot.get('saveMenu')
++    require(type(menu) is dict and menu.get('parentContext') == 'GameMenu' and menu.get('modal') is True and
++            type(menu.get('owner')) is int and menu['owner'] >= 0 and
++            type(menu.get('turn')) is int and menu['turn'] >= 0 and menu.get('timerSemaphore') == 0 and
++            menu.get('timerSemaphorePolicy') == 'PARENT_GAME_MENU_RETAINS_ONE_CHILD_OWNS_ZERO' and
++            menu.get('catalogScope') == 'CURRENT_ENGINE_SESSION_NATIVE_ZSSAVE_ONLY' and
++            menu.get('unsupportedActions') == ['overwrite', 'delete', 'cloud', 'saveMap'] and
++            menu.get('retailLayoutVerified') is False and menu.get('retailTextEditingVerified') is False,
++            'SaveMenu owner, catalog, unsupported actions, or retail proof boundary changed')
++    refs = {}
++    for field, relative in {
++        'originalLua': 'Assets/UI/InGame/Menus/SaveMenu.lua',
++        'originalXml': 'Assets/UI/InGame/Menus/SaveMenu.xml',
++        'originalUniqueBonusesLua': 'Assets/UI/FrontEnd/GameSetup/UniqueBonuses.lua',
++    }.items():
++        ref = menu.get(field)
++        require(type(ref) is dict and type(ref.get('path')) is str and
++                re.fullmatch(r'[0-9a-f]{64}', ref.get('sha256', '')) is not None and
++                ref['path'].replace('\\', '/').endswith('/' + relative),
++                'SaveMenu source provenance changed: ' + field)
++        path = Path(ref['path']).resolve(strict=True)
++        require(path.is_file() and sha256(path) == ref['sha256'] and
++                ('bytes' not in ref or path.stat().st_size == ref['bytes']) and
++                (sources is None or sources.get(path) == ref['sha256']),
++                'SaveMenu immutable source hash changed: ' + field)
++        refs[field] = {'path': str(path), 'sha256': ref['sha256']}
++    original = ET.parse(refs['originalXml']['path']).getroot()
++    templates = [node for node in original if node.tag == 'Instance']
++    require(len(templates) == 1 and templates[0].get('Name') == 'LoadButton' and len(templates[0]) == 1 and
++            menu.get('instanceNames') == ['LoadButton'] and
++            menu.get('retainedControlCount') == len(list(original.iter())), 'Original SaveMenu template inventory changed')
++    lua = Path(refs['originalLua']['path']).read_text(encoding='utf-8-sig')
++    require(menu.get('includeNames') == re.findall(r'^include\(\s*"([^"\n]+)"\s*\);', lua, re.MULTILINE),
++            'Original SaveMenu include inventory changed')
++    callback_ids = set(re.findall(r'Controls\.([A-Za-z_][A-Za-z0-9_]*):RegisterCallback\(', lua))
++    nodes, visible, descendants, static_callbacks = {}, {}, {}, set()
++    rows = 0
++
++    def compare(source, node, parent_visible=True, ancestors=()):
++        nonlocal rows
++        require(type(node) is dict and node.get('kind') == source.tag and
++                node.get('sourceAttributes') == dict(source.attrib) and node.get('id', '') == source.get('ID', '') and
++                type(node.get('key')) is int and node['key'] > 0 and node['key'] not in nodes and
++                type(node.get('children')) is list and type(node.get('hidden')) is bool and
++                type(node.get('disabled')) is bool and type(node.get('attributes')) is dict,
++                'SaveMenu retained control differs from exact original tree')
++        key = node['key'];nodes[key] = node;descendants[key] = ancestors
++        shown = parent_visible and not node['hidden']
++        if source.tag == 'ShowOnMouseOver': shown = shown and node.get('hovered') is True
++        visible[key] = shown
++        if source.get('ID') in callback_ids or source.get('ID') == 'Button': static_callbacks.add(key)
++        if source.tag == 'LuaContext':
++            require(node['hidden'] and not node['children'], 'SaveMapMenu must remain hidden and unconnected')
++        fixed = [child for child in source if child.tag != 'Instance']
++        children = node['children'];dynamic = source.get('ID') == 'LoadFileButtonStack'
++        require(len(children) >= len(fixed) and (dynamic or len(children) == len(fixed)),
++                'SaveMenu dropped or invented an original control')
++        for child, retained in zip(fixed, children): compare(child, retained, shown, (*ancestors, key))
++        for retained in children[len(fixed):]:
++            rows += 1;require(rows <= 4096, 'SaveMenu list exceeds its bounded catalog')
++            compare(templates[0][0], retained, shown, (*ancestors, key))
++
++    compare(original, snapshot.get('tree'), not closed)
++    named = {name: [node for node in nodes.values() if node.get('id') == name]
++             for name in ('NameBox', 'SaveButton', 'BackButton', 'Delete', 'CloudCheck',
++                          'SaveMapButton', 'Yes', 'DeleteConfirm')}
++    require(all(len(found) == 1 for found in named.values()), 'SaveMenu missing unique original controls')
++    named = {name: found[0] for name, found in named.items()}
++    name = named['NameBox']
++    require(name.get('kind') == 'EditBox' and name.get('maxLength') == 32 and
++            type(name.get('text')) is str and len(name['text']) <= 32 and
++            type(name.get('caretCodepoint')) is int and 0 <= name['caretCodepoint'] <= len(name['text']) and
++            type(name.get('focused')) is bool and menu.get('name') == name['text'] and
++            menu.get('focusKey') == (name['key'] if name['focused'] else 0) and
++            menu.get('textInputEnabled') is (not closed and name['focused'] and named['DeleteConfirm']['hidden']) and
++            type(menu.get('nameAvailable')) is bool and
++            named['SaveButton']['disabled'] is (not menu['nameAvailable']),
++            'SaveMenu NameBox focus, length, caret, or name availability changed')
++    require(all(named[key]['disabled'] for key in ('Delete', 'CloudCheck', 'SaveMapButton', 'Yes')) and
++            named['SaveMapButton']['hidden'] and named['CloudCheck']['hidden'] and
++            menu.get('cloudCheckGeometryVerified') is False and menu.get('unsupportedCloudCheckHidden') is True and
++            menu.get('catalogCount') == rows,
++            'SaveMenu unsupported actions escaped their permanent gate or catalog differs')
++    require(tuple(snapshot['tree'].get(field) for field in ('x', 'y', 'width', 'height')) == (0, 0, 1920, 1080),
++            'SaveMenu viewport changed')
++    expected, consumers = [], []
++    confirmation = named['DeleteConfirm']
++    for key, node in nodes.items():
++        allowed = confirmation['hidden'] or key == confirmation['key'] or confirmation['key'] in descendants[key]
++        if not visible[key] or not allowed: continue
++        callback = key in static_callbacks and not node['disabled']
++        consume = node.get('attributes', {}).get('ConsumeMouse') == '1' or node.get('attributes', {}).get('ConsumeMouseButton') == '1'
++        if callback: expected.append((key, 'LeftClick'))
++        elif consume: expected.append((key, 'ConsumeMouse'));consumers.append(key)
++    targets = snapshot.get('inputTargets')
++    require(type(targets) is list and [(row.get('key'), row.get('event')) for row in targets] == expected,
++            'SaveMenu input targets differ from original enabled controls and input consumers')
++    for target in targets:
++        node = nodes[target['key']]
++        require(target.get('id') == node.get('id', '') and target.get('visible') is True and
++                target.get('disabled') is False and
++                xywh_dict(target.get('bounds'), 'SaveMenu input') ==
++                (node['x'], node['y'], node['x'] + node['width'], node['y'] + node['height']),
++                'SaveMenu input identity or geometry differs from original retained control')
++        clipped = xywh_dict(target.get('clippedBounds'), 'SaveMenu clipped input')
++        require(positive(clipped), 'SaveMenu input is fully clipped')
++    return {'source_refs': refs, 'input_order_keys': [row['key'] for row in targets],
++            'consume_mouse_keys': consumers, 'catalog_rows': rows,
++            'original_layout_bytes_preserved': True, 'retail_pixels_verified': False,
++            'native_save_load_verified': False, 'text_editing_policy': name.get('textInputPolicy')}
+ 
+ 
+ def game_menu_once_alpha(attributes, animation, clock):
+@@ -2083,6 +2203,7 @@
+         self.action_info_panel_scene = None
+         self.notification_panel_scene = None
+         self.game_menu_scene = None
++        self.save_menu_scene = None
+         self.economic_slot_keys, self.economic_context_keys = set(), set()
+         self.economic_bar_sources, self.economic_button_sources = {}, {}
+         self.city_view_layout_variant = city_view_layout_variant if context == 'city-view' else None
+@@ -2112,7 +2233,8 @@
+                            'economic-overview': 'Assets/DLC/Expansion2/UI/InGame/Popups/EconomicOverview.xml',
+                            'action-info-panel': 'Assets/DLC/Expansion2/UI/InGame/WorldView/ActionInfoPanel.xml',
+                            'notification-panel': 'Assets/DLC/Expansion2/UI/InGame/WorldView/NotificationPanel.xml',
+-                           'game-menu': 'Assets/DLC/Expansion2/UI/InGame/Menus/GameMenu.xml'}[context]
++                           'game-menu': 'Assets/DLC/Expansion2/UI/InGame/Menus/GameMenu.xml',
++                           'save-menu': 'Assets/UI/InGame/Menus/SaveMenu.xml'}[context]
+         self.layout_path = self.game_root / layout_relative
+         self.unit_panel_consume_sources = set()
+         self.top_panel_consume_source_count = 0
+@@ -2179,6 +2301,10 @@
+         self.context_sources = {self.layout_path: sha256(self.layout_path), self.script_path: sha256(self.script_path)}
+         if context == 'game-menu':
+             self.context_sources[self.styles_path] = self.styles_hash
++        if context == 'save-menu':
++            self.context_sources[self.styles_path] = self.styles_hash
++            unique_bonuses = self.game_root / 'Assets/UI/FrontEnd/GameSetup/UniqueBonuses.lua'
++            self.context_sources[unique_bonuses] = sha256(unique_bonuses)
+         if context == 'economic-overview':
+             economic_proof = validate_economic_overview_prepared(economic_overview_prepared, verify_files=True)
+             for slot, (_, _, layout, base) in ECONOMIC_SPECS.items():
+@@ -2470,9 +2596,10 @@
+         self.sprites.append((texture, key, *source, *target, *clip, *color))
+ 
+     def game_menu_hits(self):
+-        require(self.context == 'game-menu' and type(self.game_menu_scene) is dict and
++        proof = self.save_menu_scene if self.context == 'save-menu' else self.game_menu_scene
++        require(self.context in ('game-menu', 'save-menu') and type(proof) is dict and
+                 [target['key'] for target in self.production_input_targets] ==
+-                self.game_menu_scene['input_order_keys'],
++                proof['input_order_keys'],
+                 'GameMenu hit compilation lacks its source-validated input order')
+         geometry = {row['key']: row for row in self.geometry if not row.get('style_decoration')}
+         for target in self.production_input_targets:
+@@ -2483,8 +2610,9 @@
+             row = geometry[key]
+             require(target['event'] in ('LeftClick', 'ConsumeMouse') and
+                     (target['event'] != 'LeftClick' or
+-                     row['kind'] in ('Button', 'GridButton', 'TextButton') and not target['disabled']) and
+-                    (target['event'] != 'ConsumeMouse' or key in self.game_menu_scene['consume_mouse_keys']),
++                     row['kind'] in (('Button', 'GridButton', 'TextButton', 'EditBox') if self.context == 'save-menu'
++                                    else ('Button', 'GridButton', 'TextButton')) and not target['disabled']) and
++                    (target['event'] != 'ConsumeMouse' or key in proof['consume_mouse_keys']),
+                     'GameMenu hit is not its original enabled callback or source-bound consumer')
+             row['input_target'] = True
+             row['input_targets'] = [target['event']]
+@@ -2496,7 +2624,7 @@
+     def production_hits(self, root):
+         require(self.context in SCENE_CONTEXTS and type(self.production_input_targets) is list,
+                 'Retained input target validation was not initialized')
+-        if self.context == 'game-menu':
++        if self.context in ('game-menu', 'save-menu'):
+             self.game_menu_hits()
+             return
+         nodes = {}
+@@ -3105,7 +3233,9 @@
+         text = node['text']
+         markup_text = close_stock_top_panel_negative_gold_label(
+             text, context=self.context, control_id=node.get('id'), kind=node.get('kind'))
+-        if '[ICON_' in markup_text:
++        if self.context == 'save-menu' and node.get('kind') == 'EditBox':
++            plain, inline_tints, icon_occurrences = text, [None] * len(text), {}
++        elif '[ICON_' in markup_text:
+             plain, inline_tints, icon_occurrences = markup(markup_text, self.inline_colors, self.inline_icons)
+         else:
+             plain, inline_tints = markup(markup_text, self.inline_colors)
+@@ -3171,7 +3301,8 @@
+                     bounds[2] == node.get('width') and bounds[3] == node.get('height') and
+                     bounds[2] >= 0 and bounds[3] >= 0,
+                     'Retained textFrame geometry differs from retained label bounds')
+-            require(text_frame['height'] >= len(lines) * effective_line_advance,
++            require(text_frame['height'] >= len(lines) * effective_line_advance or
++                    self.context == 'save-menu' and node.get('kind') == 'EditBox' and len(lines) == 1,
+                     'Retained textFrame height cannot contain its captured GGXML lines')
+         else:
+             layout = layout_text(plain, font, inline_glyphs=inline_glyphs)
+@@ -3181,6 +3312,13 @@
+             else:
+                 bounds = anchor(attrs, parent, layout.width, layout.height, stack_y)
+         x, y, _, _ = bounds
++        edit_scroll = 0
++        if self.context == 'save-menu' and node.get('kind') == 'EditBox':
++            clip = intersect(clip, rect(bounds))
++            if node.get('focused'):
++                caret_advance = layout_text(plain[:node['caretCodepoint']], font).width
++                edit_scroll = max(0, caret_advance - max(0, bounds[2] - 1))
++            x -= edit_scroll
+         color_set = attrs.get('ColorSet', inherited.get('ColorSet'))
+         if color_set:
+             require(color_set in font.color_sets, 'Unknown original label ColorSet')
+@@ -3247,6 +3385,20 @@
+                             'captured_ggxml_layout_recomputed': self.context in SCENE_CONTEXTS and captured_metrics,
+                             'retail_metric_semantics_verified': False,
+                             'retail_pixel_equivalence_verified': False})
++        if self.context == 'save-menu' and node.get('kind') == 'EditBox':
++            self.labels[-1]['literal_text'] = True
++            self.labels[-1]['horizontal_scroll_pixels'] = edit_scroll
++            self.labels[-1]['scroll_policy'] = 'KEEP_CODEPOINT_CARET_IN_ORIGINAL_NAMEBOX_RECT_CANDIDATE'
++            self.labels[-1]['retail_text_scroll_verified'] = False
++        if self.context == 'save-menu' and node.get('kind') == 'EditBox' and node.get('focused'):
++            caret = node['caretCodepoint']
++            advance = layout_text(plain[:caret], font).width
++            caret_x = min(bounds[0] + max(0, bounds[2] - 1), bounds[0] + advance - edit_scroll)
++            caret_top = bounds[1];caret_bottom = bounds[1] + bounds[3]
++            self.paint(node['key'], SOLID, (0, 0, 1, 1), (caret_x, caret_top, caret_x + 1, caret_bottom),
++                       intersect(clip, rect(bounds)), (1, 1, 1, opacity))
++            self.labels[-1]['caret_policy'] = 'RETAINED_CODEPOINT_ADVANCE_STATIC_ONE_PIXEL_CANDIDATE'
++            self.labels[-1]['retail_caret_timing_verified'] = False
+         return bounds
+ 
+     def city_view_toggle_text(self, node, attrs, inherited, control_bounds, clip):
+@@ -3594,7 +3746,7 @@
+                 bounds = ((node['x'], node['y'], width, height)
+                           if self.context == 'economic-overview' and key in self.economic_context_keys
+                           else (0, 0, width, height))
+-            elif kind in ('Label', 'TextButton'):
++            elif kind in ('Label', 'TextButton') or self.context == 'save-menu' and kind == 'EditBox':
+                 bounds = self.label(node, attrs, parent, inherited, clip, stack_y, stack_x,
+                                     opacity=inherited_opacity)
+             else:
+@@ -3695,7 +3847,7 @@
+                     height = int(attrs['Length'])
+                 bounds = anchor(attrs, parent, width, height, stack_y)
+         require(all(math.isfinite(v) and abs(v) < 1e6 for v in bounds), 'Unbounded retained control geometry')
+-        if self.context in ('research', 'research-tree', 'tech-award', 'city-capture', 'diplomacy', 'city-view', 'unit-panel', 'declare-war', 'trade-route', 'social-policy', 'economic-overview', 'action-info-panel', 'notification-panel', 'game-menu') and kind in (
++        if self.context in ('research', 'research-tree', 'tech-award', 'city-capture', 'diplomacy', 'city-view', 'unit-panel', 'declare-war', 'trade-route', 'social-policy', 'economic-overview', 'action-info-panel', 'notification-panel', 'game-menu', 'save-menu') and kind in (
+                 'Button', 'GridButton', 'TextButton', 'UpButton', 'DownButton'):
+             require(node.get('buttonState') in ('normal', 'hover', 'pressed', 'disabled'),
+                     'Research button lacks its captured retained visual state: ' + node.get('id', ''))
+@@ -4173,7 +4325,7 @@
+             texture, tw, th = self.meter_texture(node, attrs)
+             self.paint(key, texture, (0, 0, tw, th), rect(bounds), clip)
+         if style is not None and kind == 'Box':
+-            if self.context in ('tech-award', 'city-capture', 'city-view', 'declare-war', 'trade-route', 'social-policy', 'economic-overview', 'game-menu'):
++            if self.context in ('tech-award', 'city-capture', 'city-view', 'declare-war', 'trade-route', 'social-policy', 'economic-overview', 'game-menu', 'save-menu'):
+                 self.render_style_children(style, key, bounds, inherited, clip)
+             else:
+                 for child in style:
+@@ -4213,7 +4365,7 @@
+                             0 <= scroll_y <= maximum_scroll, 'ScrollPanel lacks captured scrollY state')
+         offset = 0
+         child_scroll_panel_state = scroll_panel_state
+-        if self.context in ('production', 'city-view', 'declare-war', 'trade-route', 'social-policy', 'economic-overview', 'notification-panel', 'game-menu') and kind == 'ScrollPanel':
++        if self.context in ('production', 'city-view', 'declare-war', 'trade-route', 'social-policy', 'economic-overview', 'notification-panel', 'game-menu', 'save-menu') and kind == 'ScrollPanel':
+             child_scroll_panel_state = node
+         for child in node['children']:
+             if child.get('kind') == 'GridData':
+@@ -4244,7 +4396,7 @@
+         if (self.context == 'diplomacy' and kind == 'GridButton' and
+                 isinstance(node.get('text'), str) and node['text']):
+             self.leader_button_text(node, attrs, inherited, bounds, clip)
+-        if self.context == 'game-menu' and kind == 'GridButton' and attrs.get('String'):
++        if self.context in ('game-menu', 'save-menu') and kind == 'GridButton' and attrs.get('String'):
+             require(node.get('sourceAttributes', {}).get('String') == attrs['String'] and
+                     type(node.get('text')) is str and bool(node['text'].strip()),
+                     'GameMenu GridButton lost its original localized caption')
+@@ -4287,6 +4439,8 @@
+             self.notification_panel_scene = notification_panel_contract(snapshot, self.context_sources)
+         if self.context == 'game-menu':
+             self.game_menu_scene = game_menu_contract(snapshot, self.context_sources, closed=closed)
++        if self.context == 'save-menu':
++            self.save_menu_scene = save_menu_contract(snapshot, self.context_sources, closed=closed)
+         if self.context == 'economic-overview':
+             snapshot, proof = compose_economic_overview_snapshot(snapshot, self.economic_overview_prepared)
+             self.economic_overview_snapshot, self.economic_overview_scene = snapshot, proof
+@@ -4346,6 +4500,8 @@
+                 elif self.context == 'game-menu':
+                     require(lifecycle == ['queued', 'closed'],
+                             'GameMenu did not complete its original return lifecycle')
++                elif self.context == 'save-menu':
++                    require(lifecycle == ['queued', 'closed'], 'SaveMenu did not complete its original child return lifecycle')
+                 elif self.context in ('trade-route', 'social-policy', 'economic-overview'):
+                     expected_closed = (('TradeRoute', 'TradeRoute') if self.context == 'trade-route' else
+                                        ('EconomicOverview', 'EconomicOverview') if self.context == 'economic-overview' else
+@@ -4417,6 +4573,7 @@
+                                             else ('ActionInfoPanel', 'ActionInfoPanel') if self.context == 'action-info-panel'
+                                             else ('NotificationPanel', 'NotificationPanel') if self.context == 'notification-panel'
+                                             else ('GameMenu', 'GameMenu') if self.context == 'game-menu'
++                                            else ('SaveMenu', 'SaveMenu') if self.context == 'save-menu'
+                                             else ('DeclareWarPopup', 'DeclareWar'))
+             require(snapshot.get('contextName') == expected_name and snapshot.get('popupKind') == expected_kind,
+                     'Snapshot does not identify the selected official popup context')
+--- before/tools/verify_ui_scene.py
++++ after/tools/verify_ui_scene.py
+@@ -110,7 +110,7 @@
+ def control_tree(element: ET.Element) -> dict[str, object]:
+     kinds = {"Context", "Instance", "Box", "Image", "Label", "Grid",
+              "ScrollPanel", "Stack", "ScrollBar", "GridButton", "Button", "Container",
+-             "AlphaAnim", "DownButton", "UpButton", "Meter", "ScrollAnim", "ShowOnMouseOver", "TextureBar", "GridData"}
++             "AlphaAnim", "DownButton", "UpButton", "Meter", "ScrollAnim", "ShowOnMouseOver", "TextureBar", "GridData", "EditBox"}
+     if element.tag not in kinds:
+         raise ValueError("unsupported XML control in frozen fixture: " + element.tag)
+     if element.text and element.text.strip():
+--- before/tools/render_ui_popup.py
++++ after/tools/render_ui_popup.py
+@@ -120,7 +120,7 @@
+         key = node['key']
+         require(key in actual, 'Visible retained control was omitted from the rendered scene: ' +
+                 str(key) + '/' + node['kind'] + '/' + node.get('id', ''))
+-        if node['kind'] in ('Label', 'TextButton') or not node['width'] or not node['height']:
++        if node['kind'] in ('Label', 'TextButton', 'EditBox') or not node['width'] or not node['height']:
+             deferred.append({'key': key, 'kind': node['kind'],
+                              'reason': 'runtime label/style extent not measured'})
+         else:
+@@ -276,6 +276,19 @@
+                 any(row['kind'] == 'Grid' and tuple(row['bounds']) == (718, 250.5, 484, 651)
+                     for row in actual.values()),
+                 'GameMenu omitted its original centered frame or bottom ReturnButton geometry')
++    elif context == 'save-menu':
++        expected_save_geometry = {
++            ('GridButton', 'BackButton'): (519, 819, 150, 32),
++            ('GridButton', 'SaveButton'): (1142, 806, 260, 45),
++            ('ScrollPanel', 'ScrollPanel'): (902, 349, 495, 400),
++            ('EditBox', 'NameBox'): (547, 470, 324, 22),
++        }
++        require(any(row['kind'] == 'Grid' and tuple(row['bounds']) == (480, 247, 960, 658)
++                    for row in actual.values()) and
++                all(any(row['kind'] == kind and row.get('id') == identifier and
++                        tuple(row['bounds']) == bounds for row in actual.values())
++                    for (kind, identifier), bounds in expected_save_geometry.items()),
++                'SaveMenu omitted its original frame, save/back buttons, list viewport, or NameBox geometry')
+     elif context == 'notification-panel':
+         panel_geometry = [row for row in actual.values()
+                           if row.get('kind') == 'ScrollPanel' and row.get('id') == 'SmallScrollPanel']
+@@ -616,7 +629,7 @@
+                     'declare-war': 'DeclareWarPopup', 'top-panel': 'TopPanel',
+                     'trade-route': 'TradeRoute', 'social-policy': 'SocialPolicyPopup',
+                     'economic-overview': 'EconomicOverview', 'action-info-panel': 'ActionInfoPanel',
+-                    'notification-panel': 'NotificationPanel', 'game-menu': 'GameMenu'}[context]
++                    'notification-panel': 'NotificationPanel', 'game-menu': 'GameMenu', 'save-menu': 'SaveMenu'}[context]
+     popup_kind = {'production': 'Production', 'research': 'Research',
+                   'research-tree': 'ResearchTree',
+                   'tech-award': 'TechAward',
+@@ -625,7 +638,7 @@
+                   'declare-war': 'DeclareWar', 'top-panel': 'TopPanel',
+                   'trade-route': 'TradeRoute', 'social-policy': 'SocialPolicy',
+                   'economic-overview': 'EconomicOverview', 'action-info-panel': 'ActionInfoPanel',
+-                  'notification-panel': 'NotificationPanel', 'game-menu': 'GameMenu'}[context]
++                  'notification-panel': 'NotificationPanel', 'game-menu': 'GameMenu', 'save-menu': 'SaveMenu'}[context]
+     right_targets = [target for target in event_targets if target.get('event') == 'RightClick']
+     city_view_check_atlas_policy = None
+     if context == 'city-view':
+@@ -705,6 +718,7 @@
+                            'STOCK_ACTION_INFO_PANEL_COMPONENT_SCENE_COMPILED' if context == 'action-info-panel' else
+                            'STOCK_NOTIFICATION_PANEL_COMPONENT_SCENE_COMPILED' if context == 'notification-panel' else
+                            'STOCK_GAME_MENU_COMPONENT_SCENE_COMPILED' if context == 'game-menu' else
++                           'STOCK_SAVE_MENU_COMPONENT_SCENE_COMPILED' if context == 'save-menu' else
+                            'ACTUAL_SDK_CLOSED_POPUP_EMPTY_SCENE_COMPILED' if closed else
+                            'ACTUAL_SDK_RETAINED_POPUP_SCENE_COMPILED'), 'packet': artifact(packet),
+                 'snapshot': artifact(snapshot_path), 'snapshot_state_unchanged': True,
+@@ -714,6 +728,7 @@
+                 'action_info_panel_scene': compiler.action_info_panel_scene,
+                 'notification_panel_scene': compiler.notification_panel_scene,
+                 'game_menu_scene': compiler.game_menu_scene,
++                'save_menu_scene': compiler.save_menu_scene,
+                 'context_name': context_name,
+                 'popup_kind': popup_kind,
+                 'city_view_layout_variant': (compiler.city_view_layout_variant
+--- before/Tests/game_menu_scene.py
++++ after/Tests/game_menu_scene.py
+@@ -186,6 +186,7 @@
+   requests[#requests+1]={kind='QuickSave'};return
+  end
+  if op=='gameMenuUnavailable' then requests[#requests+1]={kind='Unavailable',action=(...)};return end
++ if op=='saveMenuOpen' then requests[#requests+1]={kind='OpenSaveMenu',action='SaveMenu'};return end
+  error('Unexpected native operation '..op)
+ end
+ run(source.scene..'\n'..source.input,'retained-GameMenu')
+@@ -371,7 +372,10 @@
+ click('DetailsButton');check(node(snap().tree,'DetailsPanel').hidden,'Original details toggle did not return')
+ for id,action in pairs({SaveGameButton='SaveMenu',LoadGameButton='LoadMenu',OptionsButton='OptionsMenu_InGame',TouchHelpButton='TouchControlsMenu'}) do
+  if id~='TouchHelpButton' or fixtureTouch then
+-  click(id);latest(action);check(env.ZeroSisUi.IsActive() and timerBalance==1,'Unconnected child altered menu lifetime')
++  click(id)
++  if action=='SaveMenu' then check(requests[#requests].kind=='OpenSaveMenu','Original Save callback did not queue connected child')
++  else latest(action) end
++  check(env.ZeroSisUi.IsActive() and timerBalance==1,'Child request altered menu lifetime')
+   check(node(snap().tree,action).hidden,'Unconnected child became visible')
+  end
+ end
+--- before/tools/interactive_ui_driver.py
++++ after/tools/interactive_ui_driver.py
+@@ -27,10 +27,10 @@
+                             valid_declare_war_lifecycle, validate_social_policy_metadata,
+                             validate_social_policy_hover_gate, compose_economic_overview_snapshot,
+                             economic_walk, economic_source_ref, action_info_panel_contract,
+-                            notification_panel_contract, game_menu_contract)
++                            notification_panel_contract, game_menu_contract, save_menu_contract)
+ from civ5_ui_assets import _reject_reparse
+ 
+-CONTEXTS = {'production', 'research', 'research-tree', 'tech-award', 'ranking', 'city-capture', 'diplomacy', 'city-view', 'unit-panel', 'declare-war', 'top-panel', 'trade-route', 'social-policy', 'economic-overview', 'action-info-panel', 'notification-panel', 'game-menu'}
++CONTEXTS = {'production', 'research', 'research-tree', 'tech-award', 'ranking', 'city-capture', 'diplomacy', 'city-view', 'unit-panel', 'declare-war', 'top-panel', 'trade-route', 'social-policy', 'economic-overview', 'action-info-panel', 'notification-panel', 'game-menu', 'save-menu'}
+ SUPPORT = ('interactive_ui_driver.py', 'render_ui_popup.py', 'ui_pixel_scene.py',
+            'ui_bitmap_fonts.py', 'civ5_ui_assets.py')
+ 
+@@ -95,6 +95,34 @@
+         require(manifest.get('sprite_count') == 0 and manifest.get('texture_count') == 0 and
+                 manifest.get('geometry') == [] and manifest.get('labels') == [],
+                 'Closed GameMenu retained paint or geometry after its original return callback')
++
++
++def validate_save_menu_scene_proof(snapshot: dict, manifest: dict, *, closed: bool = False) -> None:
++    expected = save_menu_contract(snapshot, closed=closed)
++    require(manifest.get('save_menu_scene') == expected and
++            manifest.get('status') == 'STOCK_SAVE_MENU_COMPONENT_SCENE_COMPILED' and
++            manifest.get('context') == 'save-menu' and manifest.get('context_name') == 'SaveMenu' and
++            manifest.get('popup_kind') == 'SaveMenu' and manifest.get('packet_version') == 'ZSUPIX02' and
++            manifest.get('closed_context_not_drawn') is closed and
++            manifest.get('retained_input_targets') == snapshot['inputTargets'],
++            'SaveMenu manifest lost its original child screen/input/lifecycle contract')
++    sources = manifest.get('original_context_sources', [])
++    for ref in expected['source_refs'].values():
++        require(any(type(row) is dict and row.get('path') == ref['path'] and row.get('sha256') == ref['sha256']
++                    for row in sources), 'SaveMenu manifest omitted exact original source provenance')
++    def regions(targets):
++        return [[row['key'], row['clippedBounds']['x'], row['clippedBounds']['y'],
++                 row['clippedBounds']['x'] + row['clippedBounds']['width'],
++                 row['clippedBounds']['y'] + row['clippedBounds']['height']] for row in targets]
++    require(manifest.get('hit_regions') == regions(snapshot['inputTargets']) and
++            manifest.get('scroll_regions') == regions(snapshot['scrollTargets']) and
++            manifest.get('input_target_count') == len(snapshot['inputTargets']) and
++            manifest.get('scroll_region_count') == len(snapshot['scrollTargets']),
++            'SaveMenu packet hit/scroll regions differ from the original retained targets')
++    if closed:
++        require(manifest.get('sprite_count') == 0 and manifest.get('texture_count') == 0 and
++                manifest.get('geometry') == [] and manifest.get('labels') == [],
++                'Closed SaveMenu retained paint or input after original OnBack')
+ 
+ 
+ def validate_action_info_panel_scene_proof(snapshot: dict, manifest: dict) -> None:
+@@ -495,6 +523,7 @@
+                         'action-info-panel': ('ActionInfoPanel', 'ActionInfoPanel'),
+                         'notification-panel': ('NotificationPanel', 'NotificationPanel'),
+                         'game-menu': ('GameMenu', 'GameMenu'),
++                        'save-menu': ('SaveMenu', 'SaveMenu'),
+                         'declare-war': ('DeclareWarPopup', 'DeclareWar')}[context]
+     require((snapshot_doc.get('contextName'), snapshot_doc.get('popupKind')) == expected_context,
+             'Snapshot context metadata differs from the requested renderer')
+@@ -504,6 +533,8 @@
+         action_info_panel_contract(snapshot_doc)
+     if context == 'game-menu':
+         game_menu_contract(snapshot_doc, closed=closed)
++    if context == 'save-menu':
++        save_menu_contract(snapshot_doc, closed=closed)
+     if context == 'notification-panel':
+         require(snapshot_doc.get('nonmodal') is True and snapshot_doc.get('timerSemaphore') == 0 and
+                 snapshot_doc.get('lifecycle') == ['queued'],
+@@ -512,7 +543,7 @@
+         lifecycle = snapshot_doc.get('lifecycle', [])
+         require(type(lifecycle) is list and all(type(item) is str for item in lifecycle),
+                 'Closed snapshot lifecycle is malformed')
+-        close_marker = 'closed' if context in ('research-tree', 'city-capture', 'diplomacy', 'declare-war', 'trade-route', 'social-policy', 'economic-overview', 'game-menu') else 'context-hidden:' + expected_context[0]
++        close_marker = 'closed' if context in ('research-tree', 'city-capture', 'diplomacy', 'declare-war', 'trade-route', 'social-policy', 'economic-overview', 'game-menu', 'save-menu') else 'context-hidden:' + expected_context[0]
+         lifecycle_complete = (lifecycle == ['queued', 'context-hidden:CityView']
+                               if context == 'city-view' else
+                               valid_declare_war_lifecycle(lifecycle, active=False)
+@@ -804,6 +835,8 @@
+         validate_notification_panel_scene_proof(snapshot_doc, manifest_doc)
+     if context == 'game-menu':
+         validate_game_menu_scene_proof(snapshot_doc, manifest_doc, closed=closed)
++    if context == 'save-menu':
++        validate_save_menu_scene_proof(snapshot_doc, manifest_doc, closed=closed)
+     after_snapshot, after_db = sha256(snapshot), sha256(database)
+     require(before_snapshot == after_snapshot and before_db == after_db,
+             'Snapshot or owning SDK database changed during UI preparation')
+@@ -827,6 +860,8 @@
+                                            if context == 'notification-panel' else None),
+               'game_menu_scene': (manifest_doc.get('game_menu_scene')
+                                   if context == 'game-menu' else None),
++              'save_menu_scene': (manifest_doc.get('save_menu_scene')
++                                  if context == 'save-menu' else None),
+               'unsupported_callback_controls': (manifest_doc.get('unsupported_callback_controls', [])
+                                                 if context == 'diplomacy' else []),
+               'preparation_inputs': artifact(folder / 'preparation_inputs.json'),

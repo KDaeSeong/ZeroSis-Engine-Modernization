@@ -1,0 +1,456 @@
+// Exact production fragments are inserted by the Python runner. The SDK,
+// Lua callbacks, modal lifetimes, archive capture and replacement filesystem
+// service below are explicit fixtures. No game or user save is opened.
+#include <Windows.h>
+#include <werapi.h>
+#include <algorithm>
+#include <cstdio>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+#include "UiLoadMenuContract.h"
+
+static unsigned checks=0,cases=0;
+static void Check(bool value,const char* reason){++checks;if(!value)throw std::runtime_error(reason);}
+template<class F> static void Throws(F&& fn,const char* reason){
+    bool rejected=false;try{fn();}catch(const std::exception&){rejected=true;}Check(rejected,reason);
+}
+template<class F> static void Case(const std::string& name,F&& fn){
+    fn();++cases;std::printf("OVERWRITE_HANDOFF_CASE_PASS=%s\n",name.c_str());
+}
+
+namespace ZeroSisHost {
+static const int MAX_PLAYERS=64;
+enum PlayerTypes {FixturePlayer=1};
+enum class UiPopupKind {GameMenu,SaveMenu,LoadMenu,UnitPanel,TopPanel};
+enum class UiInputKind {LeftClick,RightClick,KeyDown,PointerMove,TextInput};
+struct UiInputRequest {UiInputKind kind=UiInputKind::PointerMove;std::uint64_t key=0;double delta=0;bool consumed=false;};
+struct UiInputDispatch {static int Dispatch(){return 1;}};
+struct LockFixture {bool held=true;bool HeldByCurrentThread()const{return held;}};
+struct CommandsFixture {bool quiescent=true;bool IsQuiescent()const{return quiescent;}};
+struct ScriptFixture {bool quiescent=true;bool IsQuiescent()const{return quiescent;}};
+struct HostFixture {
+    DWORD gameThread=GetCurrentThreadId();LockFixture gameLock;CommandsFixture localCommands;
+    bool localSdkSessionBound=true,popupVisible=true,autoSaveRunning=false;ScriptFixture* scripts=nullptr;
+    unsigned gameplay=71;std::function<void(bool,bool)> autoSave;
+};
+struct ICvPlayer1 {
+    bool alive=true,human=true,turnActive=true;
+    bool IsAlive()const{return alive;}bool IsHuman()const{return human;}bool IsTurnActive()const{return turnActive;}
+};
+struct GameFixture {
+    int owner=1,turn=3;bool initialized=true,multiplayer=false,network=false;ICvPlayer1 player;unsigned decrements=0;
+    bool IsFinalInitialized()const{return initialized;}bool IsGameMultiPlayer()const{return multiplayer;}
+    bool IsNetworkMultiPlayer()const{return network;}int GetActivePlayer()const{return owner;}int GetGameTurn()const{return turn;}
+    ICvPlayer1* GetPlayer(int){return new ICvPlayer1(player);}void EndTurnTimerSemaphoreDecrement(){++decrements;}
+};
+struct SdkStateSnapshot {static unsigned Capture(const HostFixture& host){return host.gameplay;}};
+static unsigned SynchronousRandomSeed(){return 113;}
+static bool rejectPathEncoding=false;
+static std::string Utf8(const std::wstring& value){
+    if(rejectPathEncoding)throw std::runtime_error("Injected postcommit path encoding failure");
+    std::string result;for(auto scalar:value){if(scalar>127)throw std::runtime_error("Fixture path is not ASCII");result.push_back(static_cast<char>(scalar));}return result;
+}
+struct LocalGameCommands {
+    static void RequireOwnerLock(bool thread,bool locked){if(!thread || !locked)throw std::logic_error("Mock SDK owner lock is absent");}
+};
+static UiSaveMenuFile ObservedFile(const std::string& name="chosen"){
+    UiSaveMenuFile file;file.fileName="fixture-owned/"+name+".zssave";file.modificationTime="fixture-time";
+    file.modificationTimeHigh=0x01DC0000;file.modificationTimeLow=0x10203040;
+    file.observedFileIdentity={{7,11,13}};file.observedChecksum[0]=17;
+    auto header=std::make_shared<UiSaveMenuHeader>();header->gameType=0;header->turnNumber=2;header->leaderName="source-leader";
+    file.header=header;return file;
+}
+struct LuaValue {
+    int type;std::string text;bool boolean=false;
+    explicit LuaValue(std::string value):type(4),text(std::move(value)){}
+    explicit LuaValue(int value):type(value){}
+};
+struct lua_State {std::vector<LuaValue> values;void* owner=nullptr;};
+static const int LUA_TSTRING=4;
+static int lua_gettop(lua_State* state){return static_cast<int>(state->values.size());}
+static int lua_type(lua_State* state,int index){return state->values.at(static_cast<std::size_t>(index-1)).type;}
+static const char* lua_tolstring(lua_State* state,int index,std::size_t* bytes){
+    const auto& text=state->values.at(static_cast<std::size_t>(index-1)).text;*bytes=text.size();return text.c_str();
+}
+static void lua_pushboolean(lua_State* state,int value){LuaValue result(1);result.boolean=value!=0;state->values.push_back(std::move(result));}
+
+class PopupFixture final {
+public:
+    enum class TimerState {Released,Held,TransitionUnknown};
+    HostFixture host_;ScriptFixture scripts_;
+    UiPopupKind kind_=UiPopupKind::SaveMenu;bool active_=true,faulted_=false,dispatching_=false,stopping_=false,externalRouting_=true;
+    bool saveMenuInput_=false,loadMenuInput_=false,saveMenuReady_=false,loadMenuReady_=false,gameMenuReady_=false;
+    bool luaActive_=true,timerRecoveryFailed_=false;
+    TimerState timerState_=TimerState::Released;UiInputKind saveMenuInputKind_=UiInputKind::PointerMove;
+    int gameMenuOwner_=1,gameMenuTurn_=3,loadMenuCursorToken_=0;unsigned revision_=0;
+    std::unique_ptr<int> pregame_=std::unique_ptr<int>(new int(1));
+    std::unique_ptr<GameFixture> game_=std::unique_ptr<GameFixture>(new GameFixture);
+    std::shared_ptr<const UiSaveMenuCatalog> saveMenuCatalog_;
+    std::vector<SaveMenuRequest> saveMenuRequests_;std::vector<int> loadMenuRequests_,gameMenuRequests_;
+    std::vector<std::string> deletedMenuFiles_;PopupFixture* economicOwner_=nullptr;
+    std::shared_ptr<int> life_=std::make_shared<int>(1);
+    bool skipClose_=false,callbackThrows_=false,mutateGameplay_=false;
+    explicit PopupFixture(bool supported=true){
+        auto catalog=std::make_shared<UiSaveMenuCatalog>();catalog->files={ObservedFile(),ObservedFile("sibling")};
+        catalog->nameAvailable=[](const std::string& name){return name=="new";};catalog->overwriteSupported=supported;
+        saveMenuCatalog_=catalog;host_.scripts=&scripts_;
+    }
+    void Enter(){dispatching_=true;saveMenuInput_=true;saveMenuInputKind_=UiInputKind::LeftClick;scripts_.quiescent=false;}
+    void Leave(){dispatching_=false;saveMenuInput_=false;scripts_.quiescent=true;}
+    void RestoreLoadMenuCursor()noexcept{loadMenuCursorToken_=0;}
+    void RestoreGameMenuCursor()noexcept{}
+    std::string WriteSnapshot(const char*){return "no-filesystem-fixture";}
+    static int ObserveActive(){return 2;}
+    void Call(int(*function)(),void* output){
+        if(dispatching_)throw std::logic_error("Reentrant Lua boundary fixture");
+        dispatching_=true;scripts_.quiescent=false;
+        try{
+            if(function==&ObserveActive)*static_cast<bool*>(output)=luaActive_;
+            else if(function==&UiInputDispatch::Dispatch){
+                auto& request=*static_cast<UiInputRequest*>(output);request.consumed=true;
+                if(request.key==501){
+                    QueueSaveMenuOverwrite("chosen",saveMenuCatalog_->files[0].fileName.c_str());
+                    if(callbackThrows_)throw std::runtime_error("Injected Lua callback failure after overwrite queue");
+                    if(!skipClose_){QueueSaveMenuRequest(SaveMenuRequest::Kind::Close,nullptr);luaActive_=false;}
+                }else if(request.key==502){QueueSaveMenuRequest(SaveMenuRequest::Kind::Close,nullptr);luaActive_=false;}
+                if(mutateGameplay_)++host_.gameplay;
+            }else throw std::logic_error("Unknown Lua callback fixture");
+            dispatching_=false;scripts_.quiescent=true;
+        }catch(...){dispatching_=false;scripts_.quiescent=true;throw;}
+    }
+    static PopupFixture& From(lua_State* state){return *static_cast<PopupFixture*>(state->owner);}
+    @@REQUIRE@@
+    @@LOCAL_OWNER@@
+    @@OWNED_OWNER@@
+    @@SAVE_OWNER@@
+    @@IS_DELETED@@
+    @@FIND_SAVE@@
+    @@QUEUE_SAVE@@
+    @@QUEUE_OVERWRITE@@
+    @@TAKE_SAVE@@
+    @@FAULT@@
+    @@UTF8_NEXT@@
+    @@UTF8_LENGTH@@
+    @@TEXT@@
+    static int Native(lua_State* state){
+        auto& self=From(state);const char* operation=Text(state,1);
+        @@NATIVE_SUPPORTED@@
+        @@NATIVE_OVERWRITE@@
+        throw std::invalid_argument("Unknown mock native operation");
+    }
+    bool DispatchInput(UiInputKind kind,std::uint64_t key,double delta=0.0){
+        Require();if(!active_ || faulted_)return false;
+        UiInputRequest request;request.kind=kind;request.key=key;request.delta=delta;
+        @@DISPATCH_SAVE@@
+        throw std::logic_error("Not a SaveMenu fixture");
+    }
+};
+
+static unsigned atomicWrites=0;
+struct NativeSaveArchive {
+    int turn=3,activePlayer=1;
+    std::vector<unsigned char> Encode()const{return {4,5,6};}
+    static void WriteAtomic(const std::wstring&,const std::vector<unsigned char>&){++atomicWrites;}
+};
+class NativeSaveCatalog final {
+public:
+    struct ReplacementResult {bool committed=false,recoveryRequired=false;std::wstring path,recoveryPath;const char* diagnostic="mock-uncommitted";};
+    ReplacementResult configured;unsigned calls=0,newCalls=0,prepares=0,observes=0;std::vector<std::string>* timeline=nullptr;
+    bool rejectRecovery=false;
+    std::weak_ptr<int> childLife;bool childDestroyedAtWrite=false;UiSaveMenuFile lastExpected;
+    void PrepareForMutation(){++prepares;if(rejectRecovery)throw std::runtime_error("Mock pending journal requires recovery");timeline->push_back("recovery-guard");}
+    bool NameAvailable(const std::string& name){return name=="new";}
+    std::wstring WriteNew(const std::string& name,const NativeSaveArchive&,const UiSaveMenuHeader&){
+        Check(name=="new","Existing named save value changed");++newCalls;timeline->push_back("storage-new");return L"fixture-owned/new.zssave";
+    }
+    void ObserveWrittenSave(const std::wstring&,const UiSaveMenuHeader&){++observes;}
+    ReplacementResult WriteListedReplacement(const UiSaveMenuFile& expected,const NativeSaveArchive& archive,
+            const UiSaveMenuHeader& header,const std::vector<unsigned char>& manifest){
+        Check(archive.turn==3 && archive.activePlayer==1 && header.turnNumber==3,"Fresh mock SDK archive/header not passed");
+        Check(manifest==std::vector<unsigned char>({1,2,3}),"Retained bundle manifest not passed");
+        ++calls;lastExpected=expected;childDestroyedAtWrite=childLife.expired();timeline->push_back("storage");
+        if(configured.recoveryRequired)rejectRecovery=true;
+        return configured;
+    }
+};
+struct SdkSaveFixture {
+    unsigned captures=0,autoWrites=0;std::vector<std::string>* timeline=nullptr;HostFixture* host=nullptr;
+    std::wstring lastPath=L"fixture-owned/auto.zssave";
+    const std::wstring& LastPath()const{return lastPath;}
+    NativeSaveArchive Capture(bool initial,bool postTurn){
+        Check(!initial && !postTurn && !host->popupVisible,"SDK capture occurred before parent return");
+        ++captures;timeline->push_back("sdk-capture");return {};
+    }
+};
+struct UiSessionFixture {
+    std::unique_ptr<PopupFixture> child;HostFixture* host=nullptr;bool modal=true,finished=false,rejectFinish=false;
+    unsigned updates=0;std::vector<std::string>* timeline=nullptr;std::function<void()> afterFinish;
+    void Update(){
+        ++updates;
+        if(child && !child->active_){Check(child->saveMenuRequests_.empty(),"Child destroyed before Take");child.reset();timeline->push_back("child-destroy");}
+        timeline->push_back("update");
+    }
+    void FinishSaveMenuForSave(){
+        if(child || rejectFinish)throw std::logic_error("Original parent/child return order absent");
+        modal=false;host->popupVisible=false;finished=true;timeline->push_back("parent-return");if(afterFinish)afterFinish();
+    }
+    bool HasModal()const{return modal;}
+};
+class SessionFixture final {
+public:
+    HostFixture host_;ScriptFixture scripts_;std::wstring status_,directory_=L"fixture-owned";unsigned saveCount_=0;
+    std::shared_ptr<NativeSaveCatalog> saveCatalog_=std::make_shared<NativeSaveCatalog>();
+    std::shared_ptr<const UiSaveMenuCatalog> saveMenuCatalog_;std::vector<unsigned char> saveMenuBundleManifest_{1,2,3};
+    std::unique_ptr<SdkSaveFixture> saves_=std::unique_ptr<SdkSaveFixture>(new SdkSaveFixture);
+    std::unique_ptr<UiSessionFixture> ui_=std::unique_ptr<UiSessionFixture>(new UiSessionFixture);
+    std::unique_ptr<GameFixture> game_=std::unique_ptr<GameFixture>(new GameFixture);
+    std::vector<std::string> timeline;bool advancing_=false,mandatory_=false;unsigned headers_=0;
+    SessionFixture(){
+        host_.scripts=&scripts_;ui_->host=&host_;ui_->timeline=&timeline;ui_->child.reset(new PopupFixture);
+        saveMenuCatalog_=ui_->child->saveMenuCatalog_;saveCatalog_->childLife=ui_->child->life_;
+        saveCatalog_->timeline=&timeline;saves_->timeline=&timeline;saves_->host=&host_;
+        saveCatalog_->configured.path=L"fixture-owned/chosen.zssave";
+        saveCatalog_->configured.recoveryPath=L"fixture-owned/preserved-original.rollback";
+        host_.autoSave=[this](bool,bool){++saves_->autoWrites;timeline.push_back("internal-auto-save");};
+        BindAutoSaveFixture();
+    }
+    bool HasMandatoryUiDecision(){return mandatory_;}
+    UiSaveMenuHeader CaptureSaveMenuHeader(){++headers_;timeline.push_back("sdk-header");UiSaveMenuHeader header;header.turnNumber=3;return header;}
+    bool Reject(const wchar_t* reason){status_=reason;return false;}
+    void BindAutoSaveFixture(){const auto nativeAutoSave=host_.autoSave;@@AUTOSAVE_BIND@@;}
+    @@OWNER@@
+    @@HUMAN_RAW@@
+    @@HUMAN@@
+    @@SAVE_ORDINARY@@
+    @@SAVE_NAMED@@
+    @@SAVE_OVERWRITE@@
+    @@APPLY_SAVE@@
+    std::vector<SaveMenuRequest> Confirm(){
+        Check(ui_->child->DispatchInput(UiInputKind::LeftClick,501),"Confirmation was not consumed");
+        auto result=ui_->child->TakeSaveMenuRequests();Check(result.size()==2,"Overwrite did not publish [Overwrite,Close]");return result;
+    }
+    void Settle(){ui_->child.reset();ui_->modal=false;host_.popupVisible=false;}
+    SaveMenuRequest CopiedRequest(){
+        auto value=std::make_shared<UiSaveMenuFile>(saveMenuCatalog_->files[0]);
+        value->header=std::make_shared<const UiSaveMenuHeader>(*value->header);
+        return {SaveMenuRequest::Kind::Overwrite,1,3,"chosen",std::move(value)};
+    }
+};
+}
+
+int main(){
+    SetErrorMode(32771);DWORD wer=0;
+    if(FAILED(WerSetFlags(32)) || FAILED(WerGetFlags(GetCurrentProcess(),&wer)) || GetErrorMode()!=32771 || wer!=32)return 2;
+    std::puts("FAULT_UI_SUPPRESSED ERROR_MODE=32771 WER_FLAGS=32");
+    std::puts("SDK_LUA_PARENT_CAPTURE_AND_REPLACEMENT_ARE_MOCKS FILESYSTEM_MUTATED=false");
+    try{
+        using namespace ZeroSisHost;
+        static_assert(static_cast<unsigned>(SaveMenuRequest::Kind::Save)==0,"Save kind changed");
+        static_assert(static_cast<unsigned>(SaveMenuRequest::Kind::Close)==1,"Close kind changed");
+        static_assert(static_cast<unsigned>(SaveMenuRequest::Kind::Overwrite)==2,"Overwrite kind not appended");
+        Case("deep-observation-copy-and-once-take",[]{
+            PopupFixture popup;const auto original=popup.saveMenuCatalog_->files[0];popup.Enter();
+            popup.QueueSaveMenuOverwrite("chosen",original.fileName.c_str());
+            auto expected=popup.saveMenuRequests_[0].expected;
+            Check(expected && expected.get()!=&popup.saveMenuCatalog_->files[0] && expected->header.get()!=original.header.get(),"Overwrite borrowed catalog/header storage");
+            Check(SameUiSaveMenuObservation(*expected,original),"Observation copy lost identity/checksum/time/header");
+            popup.QueueSaveMenuRequest(SaveMenuRequest::Kind::Close,nullptr);popup.Leave();popup.active_=false;popup.saveMenuReady_=true;
+            auto taken=popup.TakeSaveMenuRequests();Check(taken[0].expected && !taken[1].expected,"Expected payload attached to wrong kind");
+            Check(popup.TakeSaveMenuRequests().empty(),"Completed overwrite handoff was delivered twice");
+            popup.saveMenuCatalog_.reset();Check(SameUiSaveMenuObservation(*taken[0].expected,original),"Observation lost after child/catalog destruction");
+            std::const_pointer_cast<UiSaveMenuHeader>(original.header)->leaderName="mutated-old-header";
+            Check(taken[0].expected->header->leaderName=="source-leader","Copied overwrite header aliases old catalog header");
+        });
+        const std::vector<std::pair<const char*,std::function<void(PopupFixture&)>>> queueGuards={
+            {"inactive",[](PopupFixture& p){p.active_=false;}},{"not-dispatching",[](PopupFixture& p){p.dispatching_=false;}},
+            {"stopping",[](PopupFixture& p){p.stopping_=true;}},{"no-save-input",[](PopupFixture& p){p.saveMenuInput_=false;}},
+            {"right-click",[](PopupFixture& p){p.saveMenuInputKind_=UiInputKind::RightClick;}},{"enter-key",[](PopupFixture& p){p.saveMenuInputKind_=UiInputKind::KeyDown;}},
+            {"save-ready",[](PopupFixture& p){p.saveMenuReady_=true;}},{"load-ready",[](PopupFixture& p){p.loadMenuReady_=true;}},
+            {"cursor",[](PopupFixture& p){p.loadMenuCursorToken_=1;}},{"held-timer",[](PopupFixture& p){p.timerState_=PopupFixture::TimerState::Held;}},
+            {"load-pending",[](PopupFixture& p){p.loadMenuRequests_.push_back(1);}},{"owner-change",[](PopupFixture& p){p.game_->owner=2;}},
+            {"turn-change",[](PopupFixture& p){++p.game_->turn;}},{"lock-lost",[](PopupFixture& p){p.host_.gameLock.held=false;}},
+            {"capability-false",[](PopupFixture& p){auto catalog=std::make_shared<UiSaveMenuCatalog>(*p.saveMenuCatalog_);catalog->overwriteSupported=false;p.saveMenuCatalog_=catalog;}}
+        };
+        for(const auto& guard:queueGuards)Case(std::string("queue-")+guard.first,[&]{
+            PopupFixture popup;popup.Enter();guard.second(popup);
+            Throws([&]{popup.QueueSaveMenuOverwrite("chosen","fixture-owned/chosen.zssave");},"Unsafe overwrite input admitted");
+            Check(popup.saveMenuRequests_.empty(),"Rejected overwrite left a queued request");
+        });
+        Case("invalid-utf8-and-name-bounds",[]{
+            PopupFixture popup;popup.Enter();
+            Throws([&]{popup.QueueSaveMenuOverwrite(nullptr,"fixture-owned/chosen.zssave");},"Null name admitted");
+            for(const auto& name:std::vector<std::string>({"",std::string(129,'x'),std::string(33,'x'),std::string("\xC0\xAF")}))
+                Throws([&]{popup.QueueSaveMenuOverwrite(name.c_str(),"fixture-owned/chosen.zssave");},"Invalid UTF-8 or long name admitted");
+            Check(popup.saveMenuRequests_.empty(),"Invalid name left an overwrite request");
+        });
+        Case("unlisted-empty-and-unknown-header",[]{
+            PopupFixture popup;popup.Enter();
+            for(const auto* path:{"","fixture-owned/foreign.zssave","../chosen.zssave"})
+                Throws([&]{popup.QueueSaveMenuOverwrite("chosen",path);},"Unlisted path admitted");
+            auto catalog=std::make_shared<UiSaveMenuCatalog>(*popup.saveMenuCatalog_);catalog->files[0].header.reset();popup.saveMenuCatalog_=catalog;
+            Throws([&]{popup.QueueSaveMenuOverwrite("chosen",catalog->files[0].fileName.c_str());},"Unknown header admitted");
+        });
+        Case("ambiguous-and-deleted-target",[]{
+            PopupFixture popup;popup.Enter();popup.deletedMenuFiles_.push_back("fixture-owned/chosen.zssave");
+            Throws([&]{popup.QueueSaveMenuOverwrite("chosen","fixture-owned/chosen.zssave");},"Deleted observation reused");
+            popup.deletedMenuFiles_.clear();auto catalog=std::make_shared<UiSaveMenuCatalog>(*popup.saveMenuCatalog_);
+            catalog->files.push_back(catalog->files[0]);popup.saveMenuCatalog_=catalog;
+            Throws([&]{popup.QueueSaveMenuOverwrite("chosen","fixture-owned/chosen.zssave");},"Ambiguous listed target admitted");
+        });
+        Case("duplicate-and-close-order",[]{
+            PopupFixture popup;popup.Enter();popup.QueueSaveMenuOverwrite("chosen","fixture-owned/chosen.zssave");
+            Throws([&]{popup.QueueSaveMenuOverwrite("chosen","fixture-owned/chosen.zssave");},"Duplicate overwrite admitted");
+            Throws([&]{popup.QueueSaveMenuRequest(SaveMenuRequest::Kind::Save,"new");},"New save mixed with overwrite");
+            popup.QueueSaveMenuRequest(SaveMenuRequest::Kind::Close,nullptr);
+            Throws([&]{popup.QueueSaveMenuRequest(SaveMenuRequest::Kind::Close,nullptr);},"Duplicate Close admitted");
+            Check(popup.saveMenuRequests_.size()==2,"Rejected duplicate changed committed callback requests");
+        });
+        Case("native-arity-types-and-no-forged-identities",[]{
+            PopupFixture popup;popup.Enter();
+            for(const auto count:{1u,2u,4u}){
+                lua_State state;state.owner=&popup;state.values.emplace_back(std::string("saveMenuOverwrite"));
+                while(state.values.size()<count)state.values.emplace_back(std::string("forged"));
+                Throws([&]{PopupFixture::Native(&state);},"Overwrite accepted extra identity or missing arguments");
+            }
+            lua_State wrong;wrong.owner=&popup;wrong.values={LuaValue(std::string("saveMenuOverwrite")),LuaValue(3),LuaValue(std::string("fixture-owned/chosen.zssave"))};
+            Throws([&]{PopupFixture::Native(&wrong);},"Overwrite accepted non-text name");
+            lua_State nul;nul.owner=&popup;nul.values={LuaValue(std::string("saveMenuOverwrite")),LuaValue(std::string("chosen")),LuaValue(std::string("fixture-owned/chosen.zssave\0alias",33))};
+            Throws([&]{PopupFixture::Native(&nul);},"Overwrite accepted NUL alias");
+            lua_State good;good.owner=&popup;good.values={LuaValue(std::string("saveMenuOverwrite")),LuaValue(std::string("chosen")),LuaValue(std::string("fixture-owned/chosen.zssave"))};
+            Check(PopupFixture::Native(&good)==0 && good.values.size()==3,"Overwrite API did not return zero Lua results");
+        });
+        Case("native-capability-boolean",[]{
+            for(const bool capability:{false,true}){
+                PopupFixture popup(capability);lua_State state;state.owner=&popup;state.values.emplace_back(std::string("saveMenuOverwriteSupported"));
+                Check(PopupFixture::Native(&state)==1 && state.values.back().type==1 && state.values.back().boolean==capability,"Capability is not exact boolean");
+            }
+        });
+        Case("missing-close-and-callback-throw-do-not-handoff",[]{
+            for(const bool callbackThrows:{false,true}){
+                PopupFixture popup;popup.skipClose_=true;popup.callbackThrows_=callbackThrows;
+                Throws([&]{popup.DispatchInput(UiInputKind::LeftClick,501);},"Incomplete overwrite callback admitted");
+                if(callbackThrows)Check(popup.saveMenuRequests_.empty() && !popup.saveMenuReady_,"Fault retained a partially queued overwrite");
+                else Throws([&]{popup.TakeSaveMenuRequests();},"Missing Close escaped Take");
+            }
+        });
+        Case("cancel-close-only-no-sdk-save",[]{
+            SessionFixture session;Check(session.ui_->child->DispatchInput(UiInputKind::LeftClick,502),"Back not consumed");
+            const auto requests=session.ui_->child->TakeSaveMenuRequests();session.ApplySaveMenuRequests(requests);
+            Check(session.saves_->captures==0 && session.saveCatalog_->calls==0 && session.saveCatalog_->newCalls==0,"Cancel saved SDK state");
+            Check(session.ui_->modal && !session.ui_->finished,"Back incorrectly closed retained parent");
+        });
+        Case("existing-new-save-flow-preserved",[]{
+            SessionFixture session;session.ui_->child->active_=false;
+            std::vector<SaveMenuRequest> requests={{SaveMenuRequest::Kind::Save,1,3,"new",nullptr},{SaveMenuRequest::Kind::Close,1,3,"",nullptr}};
+            session.ApplySaveMenuRequests(requests);Check(session.saveCatalog_->newCalls==1 && session.saveCatalog_->calls==0 && session.ui_->finished,"New-save path changed");
+        });
+        Case("success-after-child-destruction-and-parent-return",[]{
+            SessionFixture session;session.saveCatalog_->configured.committed=true;
+            auto requests=session.Confirm();const auto expected=requests[0].expected;session.ApplySaveMenuRequests(requests);
+            Check(session.saveCatalog_->calls==1 && session.saves_->captures==1 && session.headers_==1,"Fresh capture/write counts differ");
+            Check(session.saveCatalog_->childDestroyedAtWrite && session.ui_->finished,"Archive commit preceded child/parent return");
+            Check(SameUiSaveMenuObservation(*expected,session.saveCatalog_->lastExpected),"Storage received another observation");
+            Check(session.timeline==std::vector<std::string>({"child-destroy","update","parent-return","recovery-guard","sdk-capture","sdk-header","storage"}),"Overwrite handoff order changed");
+        });
+        const std::vector<std::pair<const char*,std::function<void(SessionFixture&)>>> finalGuards={
+            {"owner-changed",[](SessionFixture& s){s.game_->owner=2;}},{"turn-changed",[](SessionFixture& s){++s.game_->turn;}},
+            {"advancing",[](SessionFixture& s){s.advancing_=true;}},{"commands-busy",[](SessionFixture& s){s.host_.localCommands.quiescent=false;}},
+            {"autosave-running",[](SessionFixture& s){s.host_.autoSaveRunning=true;}},{"scripts-busy",[](SessionFixture& s){s.scripts_.quiescent=false;}},
+            {"popup-visible",[](SessionFixture& s){s.host_.popupVisible=true;}},{"modal",[](SessionFixture& s){s.ui_->modal=true;}},
+            {"mandatory-ui",[](SessionFixture& s){s.mandatory_=true;}},{"no-scripts",[](SessionFixture& s){s.host_.scripts=nullptr;}},
+            {"no-manifest",[](SessionFixture& s){s.saveMenuBundleManifest_.clear();}},
+            {"capability-revoked",[](SessionFixture& s){auto c=std::make_shared<UiSaveMenuCatalog>(*s.saveMenuCatalog_);c->overwriteSupported=false;s.saveMenuCatalog_=c;}}
+        };
+        for(const auto& guard:finalGuards)Case(std::string("final-")+guard.first,[&]{
+            SessionFixture session;auto request=session.CopiedRequest();session.Settle();guard.second(session);
+            Throws([&]{session.SaveNamedOverwrite(request);},"Unsafe final SDK boundary admitted");
+            Check(session.saves_->captures==0 && session.saveCatalog_->calls==0,"Rejected final boundary captured/wrote an archive");
+        });
+        const std::vector<std::pair<const char*,std::function<void(UiSaveMenuFile&)>>> forgeries={
+            {"path",[](UiSaveMenuFile& f){f.fileName="fixture-owned/foreign.zssave";}},{"time-text",[](UiSaveMenuFile& f){f.modificationTime="different";}},
+            {"time-high",[](UiSaveMenuFile& f){++f.modificationTimeHigh;}},{"time-low",[](UiSaveMenuFile& f){++f.modificationTimeLow;}},
+            {"identity",[](UiSaveMenuFile& f){++f.observedFileIdentity[2];}},{"checksum",[](UiSaveMenuFile& f){++f.observedChecksum[31];}},
+            {"header",[](UiSaveMenuFile& f){auto h=std::make_shared<UiSaveMenuHeader>(*f.header);h->leaderName="forged";f.header=h;}},
+            {"unknown-header",[](UiSaveMenuFile& f){f.header.reset();}}
+        };
+        for(const auto& forgery:forgeries)Case(std::string("forged-final-")+forgery.first,[&]{
+            SessionFixture session;auto request=session.CopiedRequest();session.Settle();
+            auto modified=std::make_shared<UiSaveMenuFile>(*request.expected);forgery.second(*modified);request.expected=modified;
+            Throws([&]{session.SaveNamedOverwrite(request);},"Forged final observation admitted");
+            Check(session.saves_->captures==0 && session.saveCatalog_->calls==0,"Forged observation reached SDK/storage");
+        });
+        Case("return-order-and-late-owner-change",[]{
+            for(const bool lateOwner:{false,true}){
+                SessionFixture session;auto requests=session.Confirm();session.ui_->rejectFinish=!lateOwner;
+                if(lateOwner)session.ui_->afterFinish=[&]{++session.game_->turn;};
+                Throws([&]{session.ApplySaveMenuRequests(requests);},"Bad parent return or late turn change admitted");
+                Check(session.saves_->captures==0 && session.saveCatalog_->calls==0,"Bad return reached fresh SDK capture");
+            }
+        });
+        Case("invalid-request-kind-payload-and-order",[]{
+            for(const unsigned variation:{0u,1u,2u,3u,4u}){
+                SessionFixture session;auto requests=session.Confirm();
+                if(variation==0)requests[0].expected.reset();
+                if(variation==1)requests[0].kind=SaveMenuRequest::Kind::Save;
+                if(variation==2)requests[1].expected=requests[0].expected;
+                if(variation==3)std::swap(requests[0],requests[1]);
+                if(variation==4)requests[1].name="forged-close";
+                Throws([&]{session.ApplySaveMenuRequests(requests);},"Invalid kind/payload/order admitted");
+                Check(session.saves_->captures==0 && session.saveCatalog_->calls==0,"Invalid request wrote SDK archive");
+            }
+        });
+        for(const bool committed:{false,true})for(const bool recovery:{false,true})
+            Case(std::string("result-")+(committed?"committed":"uncommitted")+(recovery?"-recovery":"-clean"),[&]{
+                SessionFixture session;session.Settle();auto request=session.CopiedRequest();
+                session.saveCatalog_->configured.committed=committed;session.saveCatalog_->configured.recoveryRequired=recovery;
+                if(!committed && recovery){
+                    bool stopped=false;try{session.SaveNamedOverwrite(request);}catch(const std::runtime_error& error){stopped=std::strstr(error.what(),"RECOVERY_REQUIRED")!=nullptr;}
+                    Check(stopped,"Uncommitted recovery requirement did not stop explicitly");
+                }else{
+                    const auto result=session.SaveNamedOverwrite(request);
+                    Check(result.committed==committed && result.recoveryRequired==recovery,"Commit/cleanup result changed");
+                }
+                Check(session.saveCatalog_->calls==1 && session.saves_->captures==1,"Result handling retried native replacement");
+                Check(!session.status_.empty(),"Result presentation absent");
+            });
+        Case("postcommit-path-diagnostic-failure-cannot-invite-retry",[]{
+            for(const bool recovery:{false,true}){
+                SessionFixture session;session.Settle();auto request=session.CopiedRequest();
+                session.saveCatalog_->configured.committed=true;session.saveCatalog_->configured.recoveryRequired=recovery;
+                rejectPathEncoding=true;const auto result=session.SaveNamedOverwrite(request);rejectPathEncoding=false;
+                Check(result.committed && result.recoveryRequired==recovery && session.saveCatalog_->calls==1,"Path formatting changed committed save to failure/retry");
+            }
+        });
+        Case("pending-journal-stops-all-internal-writers-before-sdk-capture",[]{
+            for(const bool afterCommit:{false,true})for(const unsigned path:{0u,1u,2u,3u}){
+                SessionFixture session;session.Settle();auto request=session.CopiedRequest();
+                if(afterCommit){
+                    session.saveCatalog_->configured.committed=true;session.saveCatalog_->configured.recoveryRequired=true;
+                    const auto result=session.SaveNamedOverwrite(request);Check(result.committed && result.recoveryRequired,"Pending committed fixture not established");
+                }else session.saveCatalog_->rejectRecovery=true;
+                const auto beforeAtomic=atomicWrites,beforePrepares=session.saveCatalog_->prepares;
+                const auto beforeCaptures=session.saves_->captures,beforeHeaders=session.headers_;
+                const auto beforeCalls=session.saveCatalog_->calls;
+                Throws([&]{
+                    if(path==0)session.Save();
+                    else if(path==1)session.SaveNamed("new");
+                    else if(path==2)session.SaveNamedOverwrite(request);
+                    else session.host_.autoSave(false,true);
+                },"Unresolved replacement journal did not stop an internal save path");
+                Check(session.saveCatalog_->prepares==beforePrepares+1,"Save path did not reach its recovery guard exactly once");
+                Check(session.saves_->captures==beforeCaptures && session.saves_->autoWrites==0 && session.headers_==beforeHeaders,
+                    "Unresolved recovery allowed SDK serialization/header capture or native autosave");
+                Check(atomicWrites==beforeAtomic && session.saveCatalog_->calls==beforeCalls && session.saveCatalog_->newCalls==0,
+                    "Unresolved recovery allowed a generic/new/replacement writer");
+            }
+        });
+        std::printf("OWNED_SAVE_OVERWRITE_HANDOFF_PASS cases=%u checks=%u GAMECORE_ACTUAL_LOADED=false HWND_CREATED=false FILESYSTEM_MUTATED=false\n",cases,checks);
+    }catch(const std::exception& error){std::fprintf(stderr,"OVERWRITE_HANDOFF_FAILURE=%s\n",error.what());return 1;}
+    return 0;
+}

@@ -1,0 +1,12 @@
+#pragma once
+#include "SdkSerializationIncludes.h"
+#include <map>
+#include <set>
+#include <sstream>
+#include <iomanip>
+#include <stdexcept>
+#include <FireWorks/FAutoArchive.h>
+#include <FireWorks/FAutoVariableBase.h>
+#include <FireWorks/FAutoArchiveClassContainer.h>
+#include <FireWorks/FAutoVariable.h>
+#include <FireWorks/FAutoVector.h>

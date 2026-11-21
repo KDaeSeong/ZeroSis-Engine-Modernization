@@ -1,0 +1,14 @@
+#pragma once
+#define NOMINMAX
+#include <windows.h>
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
+#include <climits>
+#include <memory>
+#include <string>
+#include <vector>
+#include <stdexcept>
+#include <CvGameDatabase.h>

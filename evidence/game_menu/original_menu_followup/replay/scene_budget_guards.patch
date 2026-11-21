@@ -1,0 +1,71 @@
+--- a/Source/Host/MenuReplayPresentation.h
++++ b/Source/Host/MenuReplayPresentation.h
+@@ -8,6 +8,7 @@
+ namespace ZeroSisHost {
+ struct MenuReplayLabels final {
+     std::wstring title,map,graphs,messages,playPause,turn,noGraphData,terrainReference,unsupportedReplay;
++    std::wstring graphSimplified=L"\ud45c\uc2dc \ud55c\ub3c4\ub85c \uc77c\ubd80 \uc5f0\uacb0\uc120\uc744 \uc0dd\ub7b5\ud569\ub2c8\ub2e4. \uc6d0\ubcf8 \uae30\ub85d\uc740 \uc720\uc9c0\ub429\ub2c8\ub2e4.";
+ };
+ struct MenuReplayPalette final {
+     using Color=MenuFrontEndAssets::Color;
+@@ -116,6 +117,17 @@
+             }else display.push_back(L'?');}
+         if(at<text.size())display+=L"...";
+         assets.Text(scene,key,display,x,y,width,height,align,size);
++    }
++    static std::wstring LegendLabel(const MenuFrontEndAssets& assets,const std::string& source){
++        auto text=Wide(source);
++        if(text.size()>64){text.resize(61);if(text.back()>=0xd800 && text.back()<=0xdbff)text.pop_back();text+=L"...";}
++        std::wstring display;const auto& glyphs=assets.Fonts().at(22).glyphs;
++        for(std::size_t at=0;at<text.size();++at){auto cp=static_cast<std::uint32_t>(text[at]);
++            if(cp>=0xd800 && cp<=0xdbff && at+1<text.size()){
++                const auto high=text[at],low=text[++at];cp=0x10000+((cp-0xd800)<<10)+(static_cast<std::uint32_t>(low)-0xdc00);
++                if(glyphs.count(cp)){display.push_back(high);display.push_back(low);}else display.push_back(L'?');
++            }else display.push_back(glyphs.count(cp)?static_cast<wchar_t>(cp):L'?');}
++        return display;
+     }
+     Color PlayerColor(int player,bool city) const {
+         const auto& values=city?palette_.playerPrimary:palette_.playerSecondary;
+@@ -154,10 +166,13 @@
+         assets.Button(scene,KeyBase+5,180,1000,200,48,L"|<");assets.Button(scene,KeyBase+3,420,1000,200,48,L"<");
+         assets.Button(scene,KeyBase+4,660,1000,200,48,L">");assets.Button(scene,KeyBase+6,900,1000,200,48,L">|");
+     }
+-    static void Line(const MenuFrontEndAssets& assets,SceneType& scene,float x1,float y1,float x2,float y2,Color color){
++    static bool Line(const MenuFrontEndAssets& assets,SceneType& scene,float x1,float y1,float x2,float y2,Color color,std::size_t& budget){
+         const auto distance=std::max(std::abs(x2-x1),std::abs(y2-y1));const auto steps=std::max(1,static_cast<int>(std::ceil(distance/2)));
++        if(static_cast<std::size_t>(steps)+1>budget)return false;
++        budget-=static_cast<std::size_t>(steps)+1;
+         for(int step=0;step<=steps;++step){const float f=float(step)/float(steps);
+             assets.Rect(scene,0,x1+(x2-x1)*f-1,y1+(y2-y1)*f-1,2,2,color);}
++        return true;
+     }
+     void Graph(const MenuFrontEndAssets& assets,SceneType& scene) const {
+         const auto& doc=timeline_->Document();
+@@ -170,7 +185,7 @@
+         long long axisLow=graph.minimum,axisHigh=graph.maximum;
+         if(axisLow==axisHigh){--axisLow;++axisHigh;}
+         const double range=static_cast<double>(axisHigh-axisLow);
+-        const double span=std::max(1,doc.finalTurn-doc.initialTurn);bool any=false;
++        const double span=std::max(1,doc.finalTurn-doc.initialTurn);bool any=false,simplified=false;std::size_t lineBudget=200000;
+         long long previousTick=axisLow-1;
+         for(unsigned tick=0;tick<5;++tick){const auto value=axisLow+((axisHigh-axisLow)*tick+2)/4;
+             if(value==previousTick)continue;previousTick=value;
+@@ -185,15 +200,16 @@
+             for(std::size_t index=0;index<series.points.size();index+=stride){const auto& point=series.points[index];any=true;
+                 const auto x=left+static_cast<float>((point.turn-doc.initialTurn)/span*width);
+                 const auto y=top+height-static_cast<float>((static_cast<double>(point.value)-static_cast<double>(axisLow))/range*height);
+-                if(stride==1 && point.turn==previousTurn+1)Line(assets,scene,previousX,previousY,x,y,color);
++                if(stride==1 && point.turn==previousTurn+1 && !Line(assets,scene,previousX,previousY,x,y,color,lineBudget))simplified=true;
+                 assets.Rect(scene,0,x-2,y-2,4,4,color);previousX=x;previousY=y;previousTurn=point.turn;}
+         }
+         if(!any)Text(assets,scene,0,labels_.noGraphData,left,top+height/2-30,width,60,MenuFrontEndTextAlign::Center);
++        if(simplified)Text(assets,scene,0,labels_.graphSimplified,480,810,960,30,MenuFrontEndTextAlign::Center,20);
+         for(std::size_t p=legendPage_*8;p<doc.players.size() && p<(legendPage_+1)*8;++p){
+             const auto offset=p-legendPage_*8;const float x=180+float(offset%4)*390,y=846+float(offset/4)*58;
+             const auto name=doc.players[p].civilizationShortName.empty()?doc.players[p].leaderName:doc.players[p].civilizationShortName;
+             assets.Rect(scene,0,x,y+12,18,18,PlayerColor(static_cast<int>(p),false));
+-            assets.Button(scene,KeyBase+0x1000+p,x+25,y,350,46,Wide(name.empty()?std::to_string(p):name),true,!hidden_.count(p));}
++            assets.Button(scene,KeyBase+0x1000+p,x+25,y,350,46,LegendLabel(assets,name.empty()?std::to_string(p):name),true,!hidden_.count(p));}
+         assets.Button(scene,KeyBase+18,180,980,180,48,L"<",legendPage_>0);
+         assets.Button(scene,KeyBase+19,400,980,180,48,L">",(legendPage_+1)*8<doc.players.size());
+     }

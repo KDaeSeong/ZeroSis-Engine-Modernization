@@ -1,0 +1,204 @@
+--- prune_selected_ui_hosts.py.pre-external-guard
++++ prune_selected_ui_hosts.py
+@@ -35,6 +35,9 @@
+     "20261011T124731Z_b821f4b6c26a",
+     "20261011T125838Z_2f697438e208",
+ )
++EXTERNAL_TOOL_SHA256 = {
++    os.path.normcase(r"C:\Python314\python.exe"): "fda7026477256845afab371e354c4d512896665f1761939cb5887d0a9dec257a",
++}
+ 
+ 
+ def require(value, message):
+@@ -64,6 +67,64 @@
+     require(stat.S_ISDIR(info.st_mode) and not info.st_file_attributes & 0x400 and info.st_ino != 0,
+             "Invalid/reparse directory: " + str(path))
+     return path, info
++
++
++def external_tool_snapshot(path, expected_sha256):
++    path = Path(path)
++    require(path.is_absolute(), "External dependency path is not absolute: " + str(path))
++    path = Path(os.path.abspath(path))
++    key = os.path.normcase(str(path))
++    require(key in EXTERNAL_TOOL_SHA256, "Unexpected external dependency class: " + str(path))
++    sealed_sha256 = EXTERNAL_TOOL_SHA256[key]
++    require(isinstance(expected_sha256, str) and expected_sha256.lower() == sealed_sha256,
++            "External tool reference SHA differs from reviewed seal: " + str(path))
++    for ancestor in (path, *path.parents):
++        ancestor_info = ancestor.lstat()
++        require(not ancestor_info.st_file_attributes & 0x400,
++                "External tool has a reparse point in its path: " + str(ancestor))
++        if ancestor == Path(path.anchor):
++            break
++    info = path.lstat()
++    require(stat.S_ISREG(info.st_mode) and not info.st_file_attributes & 0x400 and
++            info.st_ino != 0 and info.st_nlink == 1,
++            "External tool is not a stable single-link regular file: " + str(path))
++    before = file_metadata(info)
++    actual_sha256 = safety.digest(path)
++    after = path.lstat()
++    require(file_metadata(after) == before and actual_sha256 == sealed_sha256,
++            "External tool identity/metadata/content differs from seal: " + str(path))
++    return dict(path=str(path), sha256=actual_sha256, identity=list(identity(info)), metadata=before,
++                role="readonly_external_runtime_tool")
++
++
++def verify_external_tools(rows):
++    for row in rows:
++        current = external_tool_snapshot(row["path"], row["sha256"])
++        require(current["identity"] == row["identity"] and current["metadata"] == row["metadata"],
++                "External tool metadata changed: " + row["path"])
++
++
++def external_refs_for_current_requests(manual):
++    refs = {}
++    for run in dict.fromkeys((*manual, *KEEP_RUNTIME_RUNS)):
++        request = ROOT / "evidence/interactive_game" / run / "request.json"
++        record = json.loads(safety.boundary(request).read_text(encoding="utf-8-sig"))
++        require(record.get("run_id") == run, "Request ID differs from live runtime list: " + run)
++        for field in ("runtime_inputs", "interactive_ui_support", "interactive_ui_support_inventory",
++                      "provenance", "launcher_control_metadata"):
++            for name, sha in safety.refs(record.get(field)):
++                path = Path(name)
++                if path.is_absolute() and not path.is_relative_to(ROOT):
++                    refs.setdefault(os.path.normcase(str(path)), (path, sha))
++    release = ROOT / "Play/EarlyAccess/release.json"
++    if release.is_file():
++        for name, sha in safety.refs(json.loads(release.read_text(encoding="utf-8-sig"))):
++            path = Path(name)
++            if path.is_absolute() and not path.is_relative_to(ROOT):
++                refs.setdefault(os.path.normcase(str(path)), (path, sha))
++    require(set(refs) == set(EXTERNAL_TOOL_SHA256),
++            "Live requests/release external tool references differ from the reviewed class set")
++    return [external_tool_snapshot(path, sha) for path, sha in refs.values()]
+ 
+ 
+ def snapshot_tree(root, require_single_link=False):
+@@ -120,6 +181,8 @@
+     manual = list(dict.fromkeys(safety.RUN.findall(start_engine.read_text(encoding="utf-8-sig"))))
+     require(manual and "20261012T121847Z_732a6d5f07ea" in manual,
+             "Live Start-Engine manual runtime list is missing the promoted EA 0.6 run")
++    external_tools = external_refs_for_current_requests(manual)
++    external_by_path = {os.path.normcase(row["path"]): row for row in external_tools}
+ 
+     target_roots = []
+     target_reports = {}
+@@ -143,12 +206,25 @@
+     require(target_files, "Selected Host targets contain no files")
+ 
+     protected = {}
++    protected_digest_cache = {}
+ 
+     def protect(path, role, expected=None):
+-        path, info = checked_file(path)
++        candidate = Path(path)
++        if not candidate.is_absolute():
++            candidate = ROOT / candidate
++        path, info = checked_file(candidate)
+         require(not any(path == root or path.is_relative_to(root) for root in target_roots),
+                 "Protected file intersects selected Host target: " + str(path))
+-        sha = safety.digest(path)
++        cache_key = str(path)
++        before = file_metadata(info)
++        cached = protected_digest_cache.get(cache_key)
++        if cached is None:
++            sha = safety.digest(path)
++            protected_digest_cache[cache_key] = dict(identity=list(identity(info)), metadata=before, sha256=sha)
++        else:
++            require(cached["identity"] == list(identity(info)) and cached["metadata"] == before,
++                    "Protected file metadata changed within snapshot: " + str(path))
++            sha = cached["sha256"]
+         checked = checked_file(path)[1]
+         require(identity(checked) == identity(info) and file_metadata(checked) == file_metadata(info),
+                 "Protected file metadata changed while hashing: " + str(path))
+@@ -160,6 +236,19 @@
+         require(record["metadata"] == file_metadata(info), "Protected metadata changed during snapshot")
+         if role not in record["roles"]:
+             record["roles"].append(role)
++
++    def protect_reference(path, role, expected=None):
++        candidate = Path(path)
++        if not candidate.is_absolute():
++            candidate = ROOT / candidate
++        if candidate.is_absolute() and not candidate.is_relative_to(ROOT):
++            key = os.path.normcase(str(candidate.absolute()))
++            row = external_by_path.get(key)
++            require(row is not None, "Unexpected external dependency class: " + str(candidate))
++            require(expected is None or row["sha256"] == expected.lower(),
++                    "External dependency sealed hash mismatch: " + str(candidate))
++            return
++        protect(candidate, role, expected)
+ 
+     closure_seeds = [ROOT / "evidence" / name for name in (
+         "shared_lua_runtime/build_result.json", "explore_sdk/build_result.json",
+@@ -192,7 +281,7 @@
+     current_release = ROOT / "Play/EarlyAccess/release.json"
+     if current_release.is_file():
+         for referenced, expected in safety.refs(json.loads(current_release.read_text(encoding="utf-8-sig"))):
+-            protect(referenced, "current_release_direct_dependency", expected)
++            protect_reference(referenced, "current_release_direct_dependency", expected)
+ 
+     # Retain complete latest Host build/evidence trees and their directory identities.
+     protected_roots = []
+@@ -246,10 +335,12 @@
+         for field in ("runtime_inputs", "interactive_ui_support", "interactive_ui_support_inventory",
+                       "provenance", "launcher_control_metadata"):
+             for path, sha in safety.refs(record.get(field)):
+-                protect(path, "sealed_manual_runtime_dependency", sha)
++                protect_reference(path, "sealed_manual_runtime_dependency", sha)
+ 
+     candidate_ids = {(row["identity"][0], row["identity"][1]) for row in target_files}
+     preserved_ids = {(row["identity"][0], row["identity"][1]) for row in protected.values()}
++    external_ids = {(row["identity"][0], row["identity"][1]) for row in external_tools}
++    preserved_ids |= external_ids
+     require(not candidate_ids.intersection(preserved_ids), "Target identity aliases protected content")
+     for root in target_roots:
+         require(root not in [Path(p) for p in protected], "Target root appears in file protection set")
+@@ -283,6 +374,7 @@
+         retained_diagnostics.append(dict(path=str(path), bytes=path.stat().st_size, sha256=safety.digest(path)))
+     candidate_ids = {(row["identity"][0], row["identity"][1]) for row in target_files}
+     preserved_ids = {(row["identity"][0], row["identity"][1]) for row in protected.values()}
++    preserved_ids |= {(row["identity"][0], row["identity"][1]) for row in external_tools}
+     require(not candidate_ids.intersection(preserved_ids), "Target identity aliases protected content")
+     protected_path = output / "protected-files.json.gz"
+     with gzip.open(protected_path, "wt", encoding="utf-8") as stream:
+@@ -298,6 +390,7 @@
+                        protected_file_count=len(protected), candidate_file_count=len(target_files),
+                        candidate_directory_count=len(target_dirs), candidate_logical_bytes=sum(x["identity"][2] for x in target_files),
+                        candidate_allocated_bytes=sum(safety.stored(x["path"]) for x in target_files),
++                       readonly_external_tools=external_tools, outside_deletion_or_compression=False,
+                        active_processes="none at plan creation", target_reparse_points=0,
+                        target_hardlinks="all single-link", target_identity_collisions=0,
+                        report_dirs_are_paired_targets=True, deletion_performed=False)
+@@ -316,6 +409,7 @@
+                   protected_directories=protected_dirs, protected_roots=protected_roots,
+                   manual_runtime_ids=manual, current_host_ids=list(KEEP_HOSTS),
+                   current_fresh_restore_runtime_ids=list(KEEP_RUNTIME_RUNS),
++                  readonly_external_tools=external_tools, outside_deletion_or_compression=False,
+                   changed_source_headers=changed_header_rows, actual_user_saves=manual_saves,
+                   paired_evidence_targets=True, raw_builds_and_reports_retired_together=True,
+                   retained_compact_diagnostics=diagnostics["retained_diagnostics"],
+@@ -344,6 +438,12 @@
+     require(report.get("selected_host_ids") == list(AUTHORIZED), "Plan has a different Host allowlist")
+     require(report.get("wrapper_sha256") == safety.digest(Path(__file__)) and
+             report.get("script_sha256") == safety.digest(Path(safety.__file__)), "Reviewed cleanup scripts changed")
++    external_tools = report.get("readonly_external_tools")
++    require(isinstance(external_tools, list) and
++            {os.path.normcase(row.get("path", "")) for row in external_tools} == set(EXTERNAL_TOOL_SHA256) and
++            report.get("outside_deletion_or_compression") is False,
++            "Plan external-tool guard or no-outside-mutation declaration is invalid")
++    verify_external_tools(external_tools)
+     expected = {str((ROOT / "Build/UiWindowHost" / run).relative_to(ROOT)) for run in AUTHORIZED}
+     expected |= {str((ROOT / "evidence/ui_window_host" / run).relative_to(ROOT)) for run in AUTHORIZED}
+     actual = {row["path"] for row in report.get("directories", [])}
+@@ -401,7 +501,9 @@
+     require(not set(found_files).intersection(metadata), "Protected file overlaps target")
+     # The base apply routine revalidates the exact target ledger and all protected SHA values
+     # immediately before and after removal, and removes only listed files/empty directories.
++    verify_external_tools(external_tools)
+     safety.apply(path)
++    verify_external_tools(external_tools)
+     cleanup = json.loads((path.parent / "cleanup.json").read_text(encoding="utf-8"))
+     require(cleanup.get("status") == "PASS_OBSOLETE_ARTIFACT_RETIREMENT", "Base guarded cleanup did not pass")
+     verify_protected_metadata()

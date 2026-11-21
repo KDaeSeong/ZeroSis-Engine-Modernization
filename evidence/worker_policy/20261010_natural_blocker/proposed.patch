@@ -1,0 +1,168 @@
+*** Begin Patch
+*** Update File: C:\Users\home\OneDrive\Documents\Firaxis ModBuddy\ZeroSis' Engine Modernization\Source\Host\InteractiveGameLoop.h
+@@
+     const bool naturalWorkerResearch=originalUnitPanelCombinedSmoke && !techAwardSmoke && !combatSmoke && !captureSmoke &&
+         !warSmoke && !tradeRouteSmoke && !socialPolicySmoke && !economicSmoke && !gameMenuSmoke;
+     if(naturalWorkerResearch)std::puts("INTERACTIVE_WORKER_RESEARCH_CONTRACT=1");
++    if(naturalWorkerResearch)std::puts("INTERACTIVE_WORKER_POLICY_CONTRACT=1");
+     unsigned unitCycleStage=0;int unitCycleInitial=-1,unitCyclePrevious=-1;
+     std::size_t unitCycleCameraCount=0;unsigned long unitCycleSeed=0;
+     std::uint64_t unitCycleGeneration=0;std::vector<int> unitCycleReady;
+@@
+     bool naturalAwardPending=false;std::vector<int> naturalAwardedTechnologies;
+     std::string naturalAwardState;
+     InteractiveGameSession::BuildObservation naturalAwardWorker{},nextResearchWorker{};
++    unsigned naturalPolicyCycles=0,naturalPolicyCompleted=0;
++    bool naturalPolicyPending=false;int naturalPolicyId=-1,naturalPolicyOwner=-1,naturalPolicyTurn=-1;
++    std::uint64_t naturalPolicyGeneration=0;
++    SocialPolicySmokeFixture::Inventory naturalPolicyBefore{},naturalPolicyAfter{};
++    InteractiveGameSession::BuildObservation naturalPolicyWorker{};
++    std::string naturalPolicyBeforeState,naturalPolicyAfterState;
+     const auto sameBuildObservation=[](const InteractiveGameSession::BuildObservation& left,
+                                       const InteractiveGameSession::BuildObservation& right){
+         return std::array<int,10>{left.unit,left.plot,left.build,left.progress,left.time,left.improvement,left.expected,left.mission,left.missionBuild,left.moves}==
+@@
+                         static_cast<unsigned long long>(window.SceneGeneration()),observed.turn);
+                     return key;
+                 };
++                const auto naturalPolicyWorkerState=[&](const char* phase){
++                    const auto value=live.ObserveBuild(context,workerID,workerBuild);
++                    if(!sameBuildObservation(value,naturalPolicyWorker))
++                        throw std::runtime_error("Natural Tradition adoption changed the tracked worker");
++                    std::printf("INTERACTIVE_WORKER_POLICY_WORKER_STATE=%u|%s|%d|%d|%llu|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d\n",
++                        naturalPolicyCycles,phase,world.turn,world.activePlayer,static_cast<unsigned long long>(window.SceneGeneration()),
++                        value.unit,value.plot,value.build,value.progress,value.time,value.improvement,value.expected,value.mission,value.missionBuild,value.moves);
++                };
++                const auto naturalPolicyPopupBoundary=[&](){
++                    if(!naturalWorkerResearch || !naturalPolicyPending || !uiActive || live.UiKind()!=UiPopupKind::SocialPolicy ||
++                       world.activePlayer!=naturalPolicyOwner || world.turn!=naturalPolicyTurn || window.SceneGeneration()<=naturalPolicyGeneration ||
++                       !sameBuildObservation(live.ObserveBuild(context,workerID,workerBuild),naturalPolicyWorker))
++                        throw std::runtime_error("Natural policy input lost its original popup, owner, turn, generation or worker");
++                };
++                const auto naturalPolicyTarget=[&](const char* phase,const std::string& id,int payload=-1)->std::uint64_t{
++                    naturalPolicyPopupBoundary();std::uint64_t key=0;
++                    for(const auto& target:live.UiTargets())if(target.id==id && (payload<0 || (target.hasVoid1 && target.void1==payload))){
++                        if(key || !target.key || target.consumeMouseOnly)
++                            throw std::runtime_error("Natural policy control has a duplicate or noncallback identity");
++                        key=target.key;
++                    }
++                    if(!key)throw std::runtime_error("Natural policy control has no enabled original callback");
++                    naturalPolicyGeneration=window.SceneGeneration();
++                    std::printf("INTERACTIVE_WORKER_POLICY_TARGET=%u|%s|%d|0|%llu|%llu|%u|%d|%d\n",
++                        naturalPolicyCycles,phase,naturalPolicyId,static_cast<unsigned long long>(key),
++                        static_cast<unsigned long long>(naturalPolicyGeneration),uiRevision,world.turn,world.activePlayer);
++                    return key;
++                };
+                 const auto notificationButton=[&](int id,const char* phase)->std::uint64_t{
+                     if(uiActive || !notificationActive)throw std::runtime_error("Notification smoke requires the original world list");
+                     std::uint64_t key=0;
+@@
+                                     throw std::runtime_error("Research continuation has no settled natural completion or original SDK blocker");
+                                 next=actionInfoButton("research-continuation");smokeStage=90;return;
+                             }
++                            if(naturalWorkerResearch && observed.blockingType==ENDTURN_BLOCKING_POLICY){
++                                if(uiActive || naturalAwardPending || naturalPolicyPending || naturalPolicyCycles!=0 ||
++                                   observed.owner!=world.activePlayer || observed.turn!=world.turn || observed.canEndTurn || observed.notificationIndex<0)
++                                    throw std::runtime_error("Natural policy blocker is outside the first paid adoption boundary");
++                                const auto notification=std::find_if(observed.notifications.begin(),observed.notifications.end(),[&](const NotificationPresentation& item){
++                                    return item.id==observed.notificationIndex && item.player==world.activePlayer && item.type==NOTIFICATION_POLICY;
++                                });
++                                if(notification==observed.notifications.end())
++                                    throw std::runtime_error("Natural policy blocker has no matching paid-policy SDK notification");
++                                naturalPolicyBefore=live.ObserveSocialPolicySmoke();
++                                naturalPolicyId=context.GetInfoTypeForString("POLICY_BRANCH_TRADITION",true);
++                                const int opener=context.GetInfoTypeForString("POLICY_TRADITION",true);
++                                const auto branch=std::find_if(naturalPolicyBefore.branches.begin(),naturalPolicyBefore.branches.end(),[&](const SocialPolicySmokeFixture::Branch& value){
++                                    return value.id==naturalPolicyId;
++                                });
++                                const auto policy=std::find_if(naturalPolicyBefore.policies.begin(),naturalPolicyBefore.policies.end(),[&](const SocialPolicySmokeFixture::Policy& value){
++                                    return value.id==opener;
++                                });
++                                // This finite worker scenario audits only the first paid Tradition opener.
++                                // Its rules do not change worker speed, missions, movement or improvements.
++                                if(naturalPolicyId!=0 || opener!=6 || naturalPolicyBefore.activePlayer!=world.activePlayer || naturalPolicyBefore.turn!=world.turn ||
++                                   naturalPolicyBefore.freePolicies!=0 || naturalPolicyBefore.policySaving || naturalPolicyBefore.nextCost<=0 ||
++                                   naturalPolicyBefore.culture<naturalPolicyBefore.nextCost || branch==naturalPolicyBefore.branches.end() ||
++                                   branch->unlocked || !branch->canUnlock || branch->blocked || branch->freePolicy!=opener ||
++                                   policy==naturalPolicyBefore.policies.end() || policy->has || policy->blocked)
++                                    throw std::runtime_error("Natural policy blocker lacks its legal, affordable and unowned Tradition opener");
++                                naturalPolicyOwner=world.activePlayer;naturalPolicyTurn=world.turn;naturalPolicyGeneration=window.SceneGeneration();
++                                naturalPolicyWorker=live.ObserveBuild(context,workerID,workerBuild);
++                                naturalPolicyBeforeState=SdkStateSnapshot::Capture(host);naturalPolicyPending=true;++naturalPolicyCycles;
++                                const auto inventoryPath=directory+L"\\worker-policy-"+std::to_wstring(naturalPolicyCycles)+L"-before-inventory.json";
++                                Write(inventoryPath,SocialPolicySmokeFixture::Serialize(naturalPolicyBefore));
++                                std::printf("INTERACTIVE_WORKER_POLICY_BEGIN=%u|%d|%d|%d|%llu|%d|%d|%d\n",naturalPolicyCycles,world.turn,world.activePlayer,
++                                    observed.notificationIndex,static_cast<unsigned long long>(naturalPolicyGeneration),
++                                    naturalPolicyBefore.culture,naturalPolicyBefore.nextCost,naturalPolicyBefore.freePolicies);
++                                std::printf("INTERACTIVE_WORKER_POLICY_INVENTORY=%u|before|%s\n",naturalPolicyCycles,Utf8(inventoryPath).c_str());
++                                naturalPolicyWorkerState("before");
++                                next=actionInfoButton("policy-continuation");smokeStage=92;return;
++                            }
+                             if(observed.blockingType!=NO_ENDTURN_BLOCKING_TYPE || !observed.canEndTurn)
+-                                throw std::runtime_error("End-turn button became clickable before actual SDK readiness");
++                                throw std::runtime_error("Unhandled original end-turn blocker in bounded worker smoke: blockingType="+
++                                    std::to_string(observed.blockingType)+", notification="+std::to_string(observed.notificationIndex)+
++                                    ", canEndTurn="+std::to_string(observed.canEndTurn));
+                             next=actionInfoButton("end-turn");
+                         }else next=WorldViewHitKey::Action(WorldViewAction::EndTurn);
+                         if(naturalWorkerResearch){
+@@
+                     const auto selected=live.DecisionState(decisionCity,decisionUnit,nextResearchTech);
+                     std::printf("INTERACTIVE_WORKER_RESEARCH_SELECTED=%d|%d|%d|%llu|%d|0|%d|%d\n",world.turn,world.activePlayer,
+                         nextResearchTech,static_cast<unsigned long long>(window.SceneGeneration()),live.CurrentResearch(),selected[9],selected[10]);smokeStage=3;
++                }else if(smokeStage==92){
++                    naturalPolicyPopupBoundary();
++                    if(SdkStateSnapshot::Capture(host)!=naturalPolicyBeforeState ||
++                       SocialPolicySmokeFixture::Serialize(live.ObserveSocialPolicySmoke())!=SocialPolicySmokeFixture::Serialize(naturalPolicyBefore))
++                        throw std::runtime_error("Original policy notification changed SDK state before selection");
++                    next=naturalPolicyTarget("branch","BranchButton"+std::to_string(naturalPolicyId),naturalPolicyId);smokeStage=93;
++                }else if(smokeStage==93){
++                    naturalPolicyPopupBoundary();
++                    if(SdkStateSnapshot::Capture(host)!=naturalPolicyBeforeState ||
++                       SocialPolicySmokeFixture::Serialize(live.ObserveSocialPolicySmoke())!=SocialPolicySmokeFixture::Serialize(naturalPolicyBefore))
++                        throw std::runtime_error("Original branch selection changed SDK state before Yes");
++                    naturalPolicyWorkerState("selected");next=naturalPolicyTarget("confirm","Yes");smokeStage=94;
++                }else if(smokeStage==94){
++                    naturalPolicyPopupBoundary();naturalPolicyAfter=live.ObserveSocialPolicySmoke();
++                    SocialPolicySmokeFixture::RequireAdoption(naturalPolicyBefore,naturalPolicyAfter,naturalPolicyId,false);
++                    if(naturalPolicyAfter.freeTenets!=naturalPolicyBefore.freeTenets || naturalPolicyAfter.ideology!=naturalPolicyBefore.ideology)
++                        throw std::runtime_error("Natural Tradition opener changed ideology or free tenets");
++                    // Confirmed policies legitimately change the SDK and may consume RNG.
++                    // Establish a new baseline only after the original receiver has applied the choice.
++                    naturalPolicyAfterState=SdkStateSnapshot::Capture(host);
++                    const auto inventoryPath=directory+L"\\worker-policy-"+std::to_wstring(naturalPolicyCycles)+L"-after-inventory.json";
++                    Write(inventoryPath,SocialPolicySmokeFixture::Serialize(naturalPolicyAfter));
++                    std::printf("INTERACTIVE_WORKER_POLICY_ADOPTED=%u|%d|%d|%d|0|%d|%d|%d|%llu\n",naturalPolicyCycles,world.turn,world.activePlayer,
++                        naturalPolicyId,naturalPolicyBefore.culture,naturalPolicyBefore.nextCost,naturalPolicyAfter.culture,
++                        static_cast<unsigned long long>(window.SceneGeneration()));
++                    std::printf("INTERACTIVE_WORKER_POLICY_INVENTORY=%u|after|%s\n",naturalPolicyCycles,Utf8(inventoryPath).c_str());
++                    naturalPolicyWorkerState("adopted");next=naturalPolicyTarget("close","CloseButton");smokeStage=95;
++                }else if(smokeStage==95){
++                    if(!naturalWorkerResearch || !naturalPolicyPending || uiActive || !actionInfoActive || world.activePlayer!=naturalPolicyOwner ||
++                       world.turn!=naturalPolicyTurn || window.SceneGeneration()<=naturalPolicyGeneration || SdkStateSnapshot::Capture(host)!=naturalPolicyAfterState ||
++                       SocialPolicySmokeFixture::Serialize(live.ObserveSocialPolicySmoke())!=SocialPolicySmokeFixture::Serialize(naturalPolicyAfter))
++                        throw std::runtime_error("Original policy Close did not restore the same-turn world and adopted SDK state");
++                    naturalPolicyWorkerState("returned");
++                    const auto observed=live.ObserveActionInfoPanel();
++                    if(observed.owner!=naturalPolicyOwner || observed.turn!=naturalPolicyTurn)
++                        throw std::runtime_error("Policy return observed another SDK owner or turn");
++                    std::printf("INTERACTIVE_WORKER_POLICY_RETURNED=%u|%d|%d|%llu|%d|%d|%u|%d\n",naturalPolicyCycles,world.turn,world.activePlayer,
++                        static_cast<unsigned long long>(window.SceneGeneration()),observed.blockingType,observed.notificationIndex,
++                        observed.canEndTurn?1u:0u,live.CurrentResearch());
++                    naturalPolicyPending=false;++naturalPolicyCompleted;smokeStage=3;
+                 }else if(smokeStage==4){
+                     if(!smokeMoved || world.turn<initialTurn+1 || (!workerSmoke && world.turn!=initialTurn+1))
+                         throw std::runtime_error("Posted end-turn did not return to the next real human turn");
+@@
+         throw std::runtime_error("Gameplay smoke closed before paid SocialPolicy adoptions and the original popup return");
+     if(smoke && unitAnimation && (!worldAnimationProved || (decisions&&!uiAnimationProved)))
+         throw std::runtime_error("Gameplay smoke did not exercise live animation across world/UI frames");
++    if(naturalWorkerResearch){
++        if(naturalPolicyPending || naturalPolicyCompleted!=naturalPolicyCycles || naturalPolicyCycles>1)
++            throw std::runtime_error("Gameplay smoke closed before its natural paid-policy callback sequence completed");
++        std::printf("INTERACTIVE_WORKER_POLICY_COMPLETE=%u\n",naturalPolicyCompleted);
++    }
+ }
+ }
+ #endif
+*** End Patch

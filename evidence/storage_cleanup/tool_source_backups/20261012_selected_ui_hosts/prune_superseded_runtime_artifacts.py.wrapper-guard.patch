@@ -1,0 +1,25 @@
+--- prune_superseded_runtime_artifacts.py.pre-wrapper
++++ prune_superseded_runtime_artifacts.py
+@@ -102,8 +102,10 @@
+ 
+ 
+ def no_active_host():
+-    result = subprocess.run(['powershell.exe', '-NoProfile', '-Command',
+-        "@(Get-Process -Name ZeroSisHost_x64,cl,link -ErrorAction SilentlyContinue).Count"],
++    bundled = Path(r'C:\Users\home\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe')
++    shell = str(bundled) if bundled.is_file() else 'powershell.exe'
++    result = subprocess.run([shell, '-NoLogo', '-NoProfile', '-Command',
++        "@(Get-Process -Name ZeroSisHost_x64,cl,link,Civ5,CivilizationV -ErrorAction SilentlyContinue).Count"],
+         capture_output=True, text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
+     require(result.returncode == 0 and result.stdout.strip() == '0', 'Host/compiler is active or status is unknown')
+ 
+@@ -382,6 +384,9 @@
+                 info = regular(path)
+                 require((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) ==
+                         (row['device'], row['file_id'], row['bytes'], row['mtime_ns']), 'Retired file identity changed: ' + str(path))
++                require(info.st_nlink == row.get('links', info.st_nlink), 'Retired hardlink count changed: ' + str(path))
++                require(info.st_file_attributes == row.get('attributes', info.st_file_attributes) and
++                        info.st_mode == row.get('mode', info.st_mode), 'Retired file metadata changed: ' + str(path))
+                 require(digest(path) == row['sha256'], 'Retired file content changed: ' + str(path))
+                 unlink_without_attribute_changes(path)
+                 require(not path.exists(), 'Retired file remains: ' + str(path))

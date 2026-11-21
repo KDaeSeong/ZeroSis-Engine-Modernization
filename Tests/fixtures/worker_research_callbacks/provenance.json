@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "scope": "Exact frozen stock Lua bytes for callback-binding unit regressions; no native gameplay or restore claim.",
+  "source_run": "20261010T080723Z_86472427ac3f",
+  "files": [
+    {
+      "name": "TechTree.lua",
+      "bytes": 35656,
+      "sha256": "2caafe619194a7f599d52d92cc3f4114c3a054ced78b1f8720b651cf78283488",
+      "source": "Build/InteractiveGameRuntime/20261010T080723Z_86472427ac3f/sessions/461088a58b61ce331a5f3af55717fb83/play-ui-94/source_ui/07_TechTree.lua",
+      "source_manifest_sha256": "276376ec2b8ba251247d6f9adcee76d84117ff676be2e83e79c29459802620e0"
+    },
+    {
+      "name": "TechButtonInclude.lua",
+      "bytes": 25464,
+      "sha256": "03e5be256a72fa4c80b14a4f6b046452370651cf3002093ee1d7f76f798fd86a",
+      "source": "Build/InteractiveGameRuntime/20261010T080723Z_86472427ac3f/sessions/461088a58b61ce331a5f3af55717fb83/play-ui-94/source_ui/04_TechButtonInclude.lua",
+      "source_manifest_sha256": "276376ec2b8ba251247d6f9adcee76d84117ff676be2e83e79c29459802620e0"
+    },
+    {
+      "name": "TechPopup.lua",
+      "bytes": 13768,
+      "sha256": "4d86bcecab5738f2c8011d139dbf2f46d65e7ee5de17c26d8cf8788a21a7cefa",
+      "source": "Build/InteractiveGameRuntime/20261010T080723Z_86472427ac3f/sessions/461088a58b61ce331a5f3af55717fb83/play-ui-93/source_ui/04_TechPopup.lua",
+      "source_manifest_sha256": "061245e0c3ab6a8c9ebf0c886de52b019b5faa3d1e74a5c0c3010ada9c95c24a"
+    }
+  ],
+  "tree": {
+    "requested": {
+      "bounds": {
+        "height": 60,
+        "width": 270,
+        "x": 430,
+        "y": 474
+      },
+      "clippedBounds": {
+        "height": 60,
+        "width": 270,
+        "x": 430,
+        "y": 474
+      },
+      "consumeMouse": false,
+      "disabled": false,
+      "event": "LeftClick",
+      "id": "TechButton",
+      "key": 878,
+      "toolTipCallback": false,
+      "visible": true,
+      "void1": 2,
+      "void2": 0
+    },
+    "delivered": {
+      "bounds": {
+        "height": 45,
+        "width": 45,
+        "x": 532,
+        "y": 490.5
+      },
+      "clippedBounds": {
+        "height": 45,
+        "width": 45,
+        "x": 532,
+        "y": 490.5
+      },
+      "consumeMouse": false,
+      "disabled": false,
+      "event": "LeftClick",
+      "id": "B2",
+      "key": 958,
+      "toolTipCallback": false,
+      "visible": true,
+      "void1": 2,
+      "void2": 0
+    },
+    "technology": 2,
+    "native_posted_verified_in_this_unit_test": false
+  },
+  "popup": {
+    "requested": {
+      "bounds": {
+        "height": 60,
+        "width": 270,
+        "x": 38,
+        "y": 310
+      },
+      "clippedBounds": {
+        "height": 60,
+        "width": 262,
+        "x": 38,
+        "y": 310
+      },
+      "consumeMouse": false,
+      "disabled": false,
+      "event": "LeftClick",
+      "id": "TechButton",
+      "key": 26,
+      "toolTipCallback": false,
+      "visible": true,
+      "void1": 2,
+      "void2": 0
+    },
+    "delivered": {
+      "bounds": {
+        "height": 45,
+        "width": 45,
+        "x": 102,
+        "y": 326.5
+      },
+      "clippedBounds": {
+        "height": 45,
+        "width": 45,
+        "x": 102,
+        "y": 326.5
+      },
+      "consumeMouse": false,
+      "disabled": false,
+      "event": "LeftClick",
+      "id": "B1",
+      "key": 72,
+      "toolTipCallback": false,
+      "visible": true,
+      "void1": 2,
+      "void2": 0
+    },
+    "technology": 2,
+    "native_posted_verified_in_this_unit_test": false
+  }
+}

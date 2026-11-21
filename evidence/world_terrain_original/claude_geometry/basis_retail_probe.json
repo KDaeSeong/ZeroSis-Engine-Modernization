@@ -1,0 +1,445 @@
+{
+ "schema": "zerosis.world_terrain_original.claude_geometry.basis_retail_probe.v1",
+ "status": "PASS_FILE_ONLY",
+ "executable": {
+  "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Sid Meier's Civilization V\\CivilizationV_DX11.exe",
+  "bytes": 16982584,
+  "sha256": "b7c8977ebab33ba6c1abf65d63fa310f8d096341465e0fc419f1b4da0fcd8818"
+ },
+ "native_host_sdk_clr_hwnd_gpu_audio_or_game_executed": false,
+ "regions": {
+  "cb1_writer_stack_fill": {
+   "start": "0x6add60",
+   "stop": "0x6ade3f",
+   "bytes": 223,
+   "sha256": "ff7052687a1333e1bd6478533a94e1a8d24981d53f191b0d85d502bd7bc839aa"
+  },
+  "cb1_writer_copy": {
+   "start": "0x6ade3f",
+   "stop": "0x6adfcd",
+   "bytes": 398,
+   "sha256": "268e4b5f3836cc2947406ca9ca76758db4bf200d1e74890e3d21fd74aedaba30"
+  },
+  "cb1_writer_tess_factor": {
+   "start": "0x6adfcd",
+   "stop": "0x6ae015",
+   "bytes": 72,
+   "sha256": "b0194e5d76bb80952d9ac487616c935051cec8d5484b527e83594beb009485e0"
+  },
+  "cb1_writer_texel_scales": {
+   "start": "0x6ae12a",
+   "stop": "0x6ae1a1",
+   "bytes": 119,
+   "sha256": "d25ce3107cb04c5aa440ad009b1bd37a1a1921752f57a0d2e6e00ed73fd93bca"
+  },
+  "cb1_block_getter_0x250": {
+   "start": "0x6be670",
+   "stop": "0x6be682",
+   "bytes": 18,
+   "sha256": "ead8474fc8410e000f497f3c1a8cc1d000339db53df584c3195a14b91ccf054d"
+  },
+  "cb0_block_getter_0x70": {
+   "start": "0x6bbe60",
+   "stop": "0x6bbe6f",
+   "bytes": 15,
+   "sha256": "89044b53d16101f37c35f5d7d7af9c119b1b58c672e753bdb01b0f0c80cd62aa"
+  },
+  "patch_index_generator": {
+   "start": "0x6c9c00",
+   "stop": "0x6c9d8a",
+   "bytes": 394,
+   "sha256": "57ea1bef986c336eff92065677dee74a029f69dc63e29e36e5d4a3f6b1f5ebf6"
+  },
+  "patch_draw_cb0_writer": {
+   "start": "0x5c37e0",
+   "stop": "0x5c3a8f",
+   "bytes": 687,
+   "sha256": "9209d61e8a3519a7e91be88fb0b27d703c167799d0c2d3df508d6155da022a2c"
+  },
+  "lod_draw_item_builder": {
+   "start": "0x768160",
+   "stop": "0x7683aa",
+   "bytes": 586,
+   "sha256": "775be5d4548a960a76f67487a1eec7438d04c9807207ebd31ed26bb7b50592a9"
+  },
+  "config_bicubic_enable": {
+   "start": "0x5d932a",
+   "stop": "0x5d9355",
+   "bytes": 43,
+   "sha256": "ca00e407d60f46f5d14e64951c25e1d0fd9cf21fccbeab85f3b90b3a651ccbdc"
+  },
+  "config_bicubic_subdiv": {
+   "start": "0x5d9380",
+   "stop": "0x5d93ab",
+   "bytes": 43,
+   "sha256": "ebceee3414b1275a73efbc7833d366a18ca6a1c7e2148def79e411fcd04e0a9b"
+  },
+  "subdiv_debug_step": {
+   "start": "0x502ab0",
+   "stop": "0x502af0",
+   "bytes": 64,
+   "sha256": "605597de9d24a6417096c5aa910cc7e41cd47499fd6fd45e19a7639b09644411"
+  }
+ },
+ "basis": {
+  "status": "confirmed",
+  "cb1_10_13": [
+   [
+    -0.125,
+    0.875,
+    -0.875,
+    0.125
+   ],
+   [
+    0.375,
+    -1.5,
+    1.125,
+    0.0
+   ],
+   [
+    -0.375,
+    0.0,
+    0.375,
+    0.0
+   ],
+   [
+    0.125,
+    0.75,
+    0.125,
+    0.0
+   ]
+  ],
+  "times_eight": [
+   [
+    -1.0,
+    7.0,
+    -7.0,
+    1.0
+   ],
+   [
+    3.0,
+    -12.0,
+    9.0,
+    0.0
+   ],
+   [
+    -3.0,
+    0.0,
+    3.0,
+    0.0
+   ],
+   [
+    1.0,
+    6.0,
+    1.0,
+    0.0
+   ]
+  ],
+  "literal_sources": [
+   [
+    {
+     "block_offset": "0xa0",
+     "stack_slot": "0x30",
+     "literal": "0x9eccdc",
+     "u32": "0xbe000000"
+    },
+    {
+     "block_offset": "0xa4",
+     "stack_slot": "0x34",
+     "literal": "0xa093b4",
+     "u32": "0x3f600000"
+    },
+    {
+     "block_offset": "0xa8",
+     "stack_slot": "0x38",
+     "literal": "0x9ec94c",
+     "u32": "0xbf600000"
+    },
+    {
+     "block_offset": "0xac",
+     "stack_slot": "0x3c",
+     "literal": "0xa02860",
+     "u32": "0x3e000000"
+    }
+   ],
+   [
+    {
+     "block_offset": "0xb0",
+     "stack_slot": "0x60",
+     "literal": "0xa0acc4",
+     "u32": "0x3ec00000"
+    },
+    {
+     "block_offset": "0xb4",
+     "stack_slot": "0x64",
+     "literal": "0x9d9dc8",
+     "u32": "0xbfc00000"
+    },
+    {
+     "block_offset": "0xb8",
+     "stack_slot": "0x68",
+     "literal": "0x9e78b4",
+     "u32": "0x3f900000"
+    },
+    {
+     "block_offset": "0xbc",
+     "stack_slot": "0x6c",
+     "literal": "xorps zero",
+     "u32": "0x00000000"
+    }
+   ],
+   [
+    {
+     "block_offset": "0xc0",
+     "stack_slot": "0x40",
+     "literal": "0x9d996c",
+     "u32": "0xbec00000"
+    },
+    {
+     "block_offset": "0xc4",
+     "stack_slot": "0x44",
+     "literal": "xorps zero",
+     "u32": "0x00000000"
+    },
+    {
+     "block_offset": "0xc8",
+     "stack_slot": "0x48",
+     "literal": "0xa0acc4",
+     "u32": "0x3ec00000"
+    },
+    {
+     "block_offset": "0xcc",
+     "stack_slot": "0x4c",
+     "literal": "xorps zero",
+     "u32": "0x00000000"
+    }
+   ],
+   [
+    {
+     "block_offset": "0xd0",
+     "stack_slot": "0x50",
+     "literal": "0xa02860",
+     "u32": "0x3e000000"
+    },
+    {
+     "block_offset": "0xd4",
+     "stack_slot": "0x54",
+     "literal": "0xa0a4ac",
+     "u32": "0x3f400000"
+    },
+    {
+     "block_offset": "0xd8",
+     "stack_slot": "0x58",
+     "literal": "0xa02860",
+     "u32": "0x3e000000"
+    },
+    {
+     "block_offset": "0xdc",
+     "stack_slot": "0x5c",
+     "literal": "xorps zero",
+     "u32": "0x00000000"
+    }
+   ]
+  ],
+  "stack_fill_steps": [
+   {
+    "at": "0x6adda7",
+    "slot": "0x30",
+    "source": "0x9eccdc"
+   },
+   {
+    "at": "0x6addb5",
+    "slot": "0x34",
+    "source": "0xa093b4"
+   },
+   {
+    "at": "0x6addc3",
+    "slot": "0x38",
+    "source": "0x9ec94c"
+   },
+   {
+    "at": "0x6addd1",
+    "slot": "0x64",
+    "source": "0x9d9dc8"
+   },
+   {
+    "at": "0x6adddf",
+    "slot": "0x60",
+    "source": "0xa0acc4"
+   },
+   {
+    "at": "0x6adde5",
+    "slot": "0x68",
+    "source": "0x9e78b4"
+   },
+   {
+    "at": "0x6addee",
+    "slot": "0x48",
+    "source": "0xa0acc4"
+   },
+   {
+    "at": "0x6ade04",
+    "slot": "0x3c",
+    "source": "0xa02860"
+   },
+   {
+    "at": "0x6ade0a",
+    "slot": "0x6c",
+    "source": "zero"
+   },
+   {
+    "at": "0x6ade10",
+    "slot": "0x40",
+    "source": "0x9d996c"
+   },
+   {
+    "at": "0x6ade16",
+    "slot": "0x44",
+    "source": "zero"
+   },
+   {
+    "at": "0x6ade1c",
+    "slot": "0x4c",
+    "source": "zero"
+   },
+   {
+    "at": "0x6ade22",
+    "slot": "0x50",
+    "source": "0xa02860"
+   },
+   {
+    "at": "0x6ade28",
+    "slot": "0x54",
+    "source": "0xa0a4ac"
+   },
+   {
+    "at": "0x6ade2e",
+    "slot": "0x58",
+    "source": "0xa02860"
+   },
+   {
+    "at": "0x6ade34",
+    "slot": "0x5c",
+    "source": "zero"
+   }
+  ],
+  "row_meaning": "cb1[10] multiplies t^3, cb1[11] t^2, cb1[12] t, cb1[13] 1 (DS instructions); the column is the control index 0..3",
+  "family": "Mitchell-Netravali cubic with B = 3/4, C = 0 (identity checked on all 16 entries). Not B-spline (B=1), Catmull-Rom (B=0, C=1/2) or Bezier.",
+  "properties": {
+   "partition_of_unity": true,
+   "interpolates_controls": false,
+   "weights_at_t0": [
+    0.125,
+    0.75,
+    0.125,
+    0.0
+   ],
+   "linear_precision": false,
+   "ramp_response": "controls (-1,0,1,2) give -0.5 t^3 + 0.75 t^2 + 0.75 t, not t"
+  }
+ },
+ "other_cb1_entries": {
+  "status": "confirmed",
+  "cb1_14_x": "float(uint object+0x2428); initialised from config BicubicTerrainTessSubdiv (0xd90f14); debug step doubles/halves within 1..16",
+  "cb1_15_x": 1.0,
+  "cb1_16_xyz": {
+   "values": [
+    1.0,
+    0.8659999966621399,
+    0.20000000298023224
+   ],
+   "source": "object+0x1acc/0x1ad0/0x1ad4 copied from .data 0xb9a6d4/d8/dc; no direct store found",
+   "direct_stores": {
+    "0xb9a6d4": [],
+    "0xb9a6d8": [],
+    "0xb9a6dc": []
+   }
+  },
+  "cb1_17_xyz": "object+0x400..0x408",
+  "cb1_18_xyz": "object+0x40c..0x414",
+  "cb1_22_xy": [
+   0.0009765625,
+   -0.0009765625
+  ],
+  "cb1_23_xy": [
+   0.001953125,
+   0.001953125
+  ]
+ },
+ "controls": {
+  "status": "confirmed",
+  "index_word": "low byte = px + c + 2, high byte = py + r + 2 for patch (px, py), c fastest; 16 words per patch",
+  "vertex_shader": "x = ((id & 255) - 3) * cb0[6].x, y = ((id >> 8) - 3) * cb0[6].y, so control (c, r) sits at (px + c - 1, py + r - 1) * spacing",
+  "patch_origin": "control 5 (c = 1, r = 1); HS forwards its yz to the DS",
+  "domain": "u runs along c (x), v along r (y); the patch spans one control spacing between controls 1 and 2",
+  "patch_order": "rows outer (py = 0..H-2), columns inner (px = 0..W-2); arguments are the cell fields +0xd4 (W) and +0xd8 (H)",
+  "levels": "five levels, each (n >> 1) + 1; generator returns 0 below device tier 10",
+  "sample_5x4_first_patch": [
+   514,
+   515,
+   516,
+   517,
+   770,
+   771,
+   772,
+   773,
+   1026,
+   1027,
+   1028,
+   1029,
+   1282,
+   1283,
+   1284,
+   1285
+  ]
+ },
+ "per_draw_cb0": {
+  "status": "confirmed_layout_candidate_values",
+  "cb0_0_3": "D3DXMatrixTranslation result (world row vectors) from the negated object+0x1ab0/0x1ab4/0x1ab8 bit patterns",
+  "cb0_4": "float of int cell fields +0xdc, +0xe0, +0xe4, +0xe8 (texel origin xy and extra offset zw); values not traced",
+  "cb0_5_xy": "1 / (W + 1), 1 / (H + 1)",
+  "cb0_6_xy": "(W - 1) / (W_level - 1), (H - 1) / (H_level - 1): control spacing in height texels",
+  "cb0_6_z": "float object+0x2424: height texture mip level; floor() of it selects the index level when tier >= 10"
+ },
+ "units": {
+  "status": "confirmed_operations",
+  "height": "control height = height texture alpha * cb1[16].z * 255 = alpha * 0.2 * 255 (VS instructions and literal)",
+  "horizontal": "world xy = (domain * cb0[6].xy + origin + cb0[4].xy) * cb1[16].xy = texel * (1.0, 0.866)",
+  "sample_uv": "((id - 3) * cb0[6].xy + cb0[4].xy + cb0[4].zw + 0.5) * (1/1024, -1/1024), LOD cb0[6].z",
+  "not_established": "cell size W, H and the cb0[4] integers for a real map; the 0x1ab0 translation fields"
+ },
+ "shader_listings": {
+  "phase10/geometry/TerrainShader_0_ds.asm.txt": {
+   "sha256": "b5f3365353e8082a80ad71e527c728321165d9d7da01d43e99cc64d3aaf5d86c",
+   "lines": [
+    "mul r2.xyzw, r0.xxxx, cb1[11].xyzw",
+    "mad r2.xyzw, cb1[10].xyzw, r3.xxxx, r2.xyzw",
+    "mad r2.xyzw, cb1[12].xyzw, vDomain.xxxx, r2.xyzw",
+    "add r2.xyzw, r2.xyzw, cb1[13].xyzw",
+    "dp4 r1.x, r2.xyzw, r1.xyzw",
+    "dp4 r2.x, cb1[10].xyzw, r1.xyzw",
+    "dp4 r2.w, cb1[13].xyzw, r1.xyzw",
+    "dp4 r0.x, r2.xyzw, r0.xyzw",
+    "mad r0.yz, vDomain.xxyx, cb0[6].xxyx, vpc0.yyzy",
+    "mul r0.yz, r1.xxyx, cb1[16].xxyx"
+   ],
+   "status": "PASS"
+  },
+  "phase10/geometry/TerrainShader_0_hs.asm.txt": {
+   "sha256": "a47c22897ec03d6a8ac6b6156d9de8c1000c4bf224e2ffa03d8741ad73f5ddb3",
+   "lines": [
+    "mov o[r0.x + 0].x, cb1[14].x",
+    "mov o[r0.x + 4].x, cb1[14].x",
+    "mov o0.y, vicp[5][0].y",
+    "mov o0.z, vicp[5][0].z",
+    "dcl_tessellator_partitioning partitioning_integer"
+   ],
+   "status": "PASS"
+  }
+ },
+ "limits": [
+  "Static bytes only: no shader, GPU, Host or game was executed.",
+  "The stack image is decoded by a small fixed-form decoder; any other instruction form stops the probe.",
+  "The values prove what the CPU uploads, not that the current renderer draws the same picture."
+ ]
+}

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WindowsPerformanceRecorder Version="1.0" Author="ZeroSis">
+  <Profiles>
+    <SystemCollector Id="CitySiteSystemCollector" Name="ZeroSisCitySiteSystem">
+      <BufferSize Value="1024" />
+      <Buffers Value="32" />
+    </SystemCollector>
+    <EventCollector Id="CitySiteMarkerCollector" Name="ZeroSisCitySiteMarkers">
+      <BufferSize Value="128" />
+      <Buffers Value="64" />
+    </EventCollector>
+    <SystemProvider Id="CitySiteSystemProvider">
+      <Keywords>
+        <Keyword Value="ProcessThread" />
+        <Keyword Value="CSwitch" />
+        <Keyword Value="CpuConfig" />
+      </Keywords>
+    </SystemProvider>
+    <EventProvider Id="CitySiteMarkerProvider" Name="2d76305f-91f4-4d48-9b32-281507669f73" Level="5" />
+    <Profile Id="ZeroSisCitySite.Verbose.File" Name="ZeroSisCitySite" Description="City-site scoring markers and physical CPU scheduling diagnostics" DetailLevel="Verbose" LoggingMode="File">
+      <Collectors>
+        <SystemCollectorId Value="CitySiteSystemCollector">
+          <SystemProviderId Value="CitySiteSystemProvider" />
+        </SystemCollectorId>
+        <EventCollectorId Value="CitySiteMarkerCollector">
+          <EventProviders>
+            <EventProviderId Value="CitySiteMarkerProvider" />
+          </EventProviders>
+        </EventCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

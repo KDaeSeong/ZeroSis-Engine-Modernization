@@ -1,0 +1,16 @@
+#pragma once
+#define NOMINMAX
+#include <windows.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cassert>
+#include <climits>
+#include <cstdarg>
+#include <new>
+#include <stdexcept>
+#include <vector>
+#include <string>
+#include <process.h>
+#include <FireWorks/FCriticalSection.h>
+#include <FLuaTypes.h>

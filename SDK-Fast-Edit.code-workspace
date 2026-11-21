@@ -1,0 +1,92 @@
+{
+  "folders": [
+    { "name": "ZeroSis' SDK", "path": "." }
+  ],
+  "settings": {
+    "editor.largeFileOptimizations": true,
+    "editor.maxTokenizationLineLength": 2000,
+    "editor.wordWrap": "off",
+    "editor.minimap.enabled": false,
+    "editor.semanticHighlighting.enabled": false,
+    "editor.codeLens": false,
+    "editor.stickyScroll.enabled": false,
+    "editor.foldingStrategy": "indentation",
+    "editor.foldingMaximumRegions": 2000,
+    "editor.bracketPairColorization.enabled": false,
+    "editor.guides.bracketPairs": false,
+    "editor.matchBrackets": "never",
+    "editor.selectionHighlight": false,
+    "editor.occurrencesHighlight": "off",
+    "editor.inlayHints.enabled": "off",
+    "editor.wordBasedSuggestions": "off",
+    "editor.inlineSuggest.enabled": false,
+    "editor.quickSuggestions": false,
+    "editor.suggestOnTriggerCharacters": false,
+    "editor.formatOnType": false,
+    "editor.formatOnSave": false,
+    "files.autoSave": "off",
+    "git.enabled": false,
+    "extensions.ignoreRecommendations": true,
+    "files.exclude": {
+      "**/Build": true,
+      "**/Stage": true,
+      "**/evidence": true,
+      "**/__pycache__": true,
+      "Source/SDK_BNW_Original": true,
+      "Source/ThirdParty": true
+    },
+    "search.exclude": {
+      "**/Build/**": true,
+      "**/Stage/**": true,
+      "**/evidence/**": true,
+      "**/__pycache__/**": true,
+      "**/SDK_BNW_Original/**": true,
+      "**/ThirdParty/**": true
+    },
+    "files.watcherExclude": {
+      "**/Build/**": true,
+      "**/Stage/**": true,
+      "**/evidence/**": true,
+      "**/__pycache__/**": true,
+      "**/SDK_BNW_Original/**": true,
+      "**/ThirdParty/**": true
+    },
+    "files.associations": {
+      "*.civ5proj": "xml",
+      "*.vcxproj": "xml",
+      "*.civ5sln": "plaintext"
+    }
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "SDK x64: incremental compile",
+        "type": "process",
+        "command": "C:\\Python314\\python.exe",
+        "args": ["${workspaceFolder}\\tools\\build_sdk_incremental.py", "--arch", "x64", "--jobs", "4"],
+        "options": { "cwd": "${workspaceFolder}" },
+        "group": { "kind": "build", "isDefault": true },
+        "problemMatcher": ["$msCompile"]
+      },
+      {
+        "label": "SDK x86: incremental compile",
+        "type": "process",
+        "command": "C:\\Python314\\python.exe",
+        "args": ["${workspaceFolder}\\tools\\build_sdk_incremental.py", "--arch", "x86", "--jobs", "4"],
+        "options": { "cwd": "${workspaceFolder}" },
+        "group": "build",
+        "problemMatcher": ["$msCompile"]
+      },
+      {
+        "label": "SDK: verify dependency tracking",
+        "type": "process",
+        "command": "C:\\Python314\\python.exe",
+        "args": ["${workspaceFolder}\\Tests\\verify_sdk_incremental.py"],
+        "options": { "cwd": "${workspaceFolder}" },
+        "group": "test",
+        "problemMatcher": []
+      }
+    ]
+  }
+}

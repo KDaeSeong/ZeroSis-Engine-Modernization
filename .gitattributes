@@ -1,0 +1,2 @@
+# Preserve exact source bytes and SHA-pinned CRLF/LF inputs on every platform.
+* -text

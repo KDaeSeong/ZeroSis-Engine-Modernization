@@ -1,0 +1,287 @@
+--- before/tools/worker_research_timeline.py
++++ after/tools/worker_research_timeline.py
+@@ -328,13 +328,16 @@
+          'forced culture or separate policy fixture mixed into natural adoption')
+     commands = records('SOCIAL_POLICY_COMMAND', ints(5))
+     shown = records('SOCIAL_POLICY_SHOWN', ints(5))
++    queued_policy = [r for r in records('UI_QUEUED', ints(4)) if r[1] == '17']
++    opened_policy = [r for r in records('UI_OPENED', r'(\d+)\|([^|\r\n]+)') if r[2] == 'social-policy']
+     policy_inputs = records('SOCIAL_POLICY_INPUT', r'(\d+)\|(\d+)\|0\|([01])\|([01])\|([01])\|(\d+)\|([01])')
+     hud_targets = records('ACTION_INFO_SMOKE_TARGET', r'([^|\r\n]+)\|' + ints(5))
+     policy_hud = [r for r in hud_targets if r[1] == 'policy-continuation']
+     count = int(complete[1])
+     need(all(len(data[name]) == count * amount for name, amount in
+              (('BEGIN', 1), ('ADOPTED', 1), ('RETURNED', 1), ('TARGET', 3), ('WORKER_STATE', 4), ('INVENTORY', 2))) and
+-         len(commands) == len(shown) == len(policy_hud) == count and len(policy_inputs) == 3 * count,
++         len(commands) == len(shown) == len(policy_hud) == len(queued_policy) == len(opened_policy) == count and
++         len(policy_inputs) == 3 * count,
+          'policy cycle/command/input/inventory counts differ')
+     proof = {'contract_version': 1, 'completed_cycle_count': count, 'cycles': [], 'callback_inputs': []}
+     if not count:
+@@ -387,6 +390,7 @@
+     posts = records('SMOKE_POSTED', ints(4)); buttons = records('SMOKE_BUTTON', ints(4))
+     native_inputs = records('UI_NATIVE_INPUT', ints(4))
+     panel_inputs = records('ACTION_INFO_PANEL_INPUT', ints(6))
++    panel_callbacks = records('ACTION_INFO_INPUT', ints(7))
+     timers = list(re.finditer(r'^UI_WINDOW_INPUT=' + ints(10) + '$', text, re.M))
+     need(len(timers) == sum(line.startswith('UI_WINDOW_INPUT=') for line in text.splitlines()), 'malformed popup timer dispatch')
+ 
+@@ -406,10 +410,23 @@
+     hp = one([r for r in posts if numbers(r)[:2] == (generation, hud_key)], 'missing policy HUD post')
+     hb = one([r for r in buttons if numbers(r)[:2] == (generation, hud_key)], 'missing policy HUD button')
+     hi = one([r for r in panel_inputs if numbers(r)[:3] == (generation, 1, hud_key)], 'missing policy HUD consumption')
++    callback = one([r for r in panel_callbacks if hp.end() < r.start() < hi.start()],
++                   'missing/repeated policy original HUD callback')
++    timer = one([r for r in timers if hp.end() < r.start() < hi.start()],
++                'missing/repeated policy original HUD timer dispatch')
++    ti = numbers(timer)
++    need(numbers(callback) == (2, hud_key-key_base, 1, owner, turn, 1, 0) and
++         ti[:4] == (0, 2, hud_key-key_base, 1) and
++         ti[4] == ti[5] and ti[6:9] == (0, 0, turn) and ti[9] > 0,
++         'policy original HUD callback scope/RNG/timer differs')
+     need(numbers(hb)[2:] == (1, 0) and numbers(hi)[3:] == (hud_key-key_base, 1, 0) and
+          hud.end() < hb.start() < hp.start() < hi.start() < targets[0].start(), 'policy HUD HWND callback differs')
+-    need((int(shown[0][1]), int(shown[0][4]), int(shown[0][5])) == (owner, turn, 1) and
+-         hi.end() < shown[0].start() < targets[0].start(), 'policy popup did not follow the original notification')
++    # ActivateNotification queues and opens the original popup before the
++    # action-info callback reports its consumed input to the world loop.
++    need(numbers(queued_policy[0]) == (17, owner, -1, -1) and
++         numbers(shown[0]) == (owner, owner, -1, turn, 1) and int(opened_policy[0][1]) > 0 and
++         hp.end() < callback.start() < timer.start() < queued_policy[0].start() < shown[0].start() < opened_policy[0].start() <
++         hi.start() < targets[0].start(), 'policy popup did not follow the original notification')
+     callbacks = [{'context': 'action-info-panel', 'phase': 'hud', 'sequence': int(initial_hud[1]),
+                   'turn': turn, 'owner': owner, 'generation': generation, 'key': hud_key-key_base,
+                   'native_key': hud_key-key_base, 'world_key': hud_key, 'client': [int(hp[3]), int(hp[4])]}]
+--- before/Tests/test_worker_research_timeline.py
++++ after/Tests/test_worker_research_timeline.py
+@@ -158,8 +158,12 @@
+     state('before', 31)
+     lines.extend([f'INTERACTIVE_ACTION_INFO_SMOKE_TARGET=policy-continuation|0|42|{key}|31|{turn}',
+                   f'INTERACTIVE_SMOKE_BUTTON=31|{key}|1|0', f'INTERACTIVE_SMOKE_POSTED=31|{key}|1100|570',
+-                  f'INTERACTIVE_ACTION_INFO_PANEL_INPUT=31|1|{key}|2|1|0',
+-                  f'INTERACTIVE_SOCIAL_POLICY_SHOWN=0|0|-1|{turn}|1'])
++                  f'INTERACTIVE_ACTION_INFO_INPUT=2|2|1|0|{turn}|1|0',
++                  f'UI_WINDOW_INPUT=0|2|2|1|44|44|0|0|{turn}|99',
++                  'INTERACTIVE_UI_QUEUED=17|0|-1|-1',
++                  f'INTERACTIVE_SOCIAL_POLICY_SHOWN=0|0|-1|{turn}|1',
++                  'INTERACTIVE_UI_OPENED=10|social-policy',
++                  f'INTERACTIVE_ACTION_INFO_PANEL_INPUT=31|1|{key}|2|1|0'])
+     for index, phase in enumerate(('branch', 'confirm', 'close')):
+         generation, button = 32 + index, 900 + index
+         lines.append(f'INTERACTIVE_UI_SCENE_REQUEST={generation}|social-policy|snapshot-{generation}|folder-{generation}')
+@@ -404,6 +408,62 @@
+ 
+ 
+ class NaturalPolicyTimeline(unittest.TestCase):
++    def test_notification_popup_opens_before_consumed_callback_return(self):
++        text = policy_fixture()
++        events = ['INTERACTIVE_ACTION_INFO_INPUT=2|2|1|0|1|1|0',
++                  'UI_WINDOW_INPUT=0|2|2|1|44|44|0|0|1|99',
++                  'INTERACTIVE_UI_QUEUED=17|0|-1|-1',
++                  'INTERACTIVE_SOCIAL_POLICY_SHOWN=0|0|-1|1|1',
++                  'INTERACTIVE_UI_OPENED=10|social-policy',
++                  f'INTERACTIVE_ACTION_INFO_PANEL_INPUT=31|1|{KEY_BASE + 2}|2|1|0']
++        block = '\n'.join(events)
++        self.assertIn(block, text)
++        self.assertEqual(verify_worker_policy_timeline(text, required=True)['completed_cycle_count'], 1)
++        for order in ((5, 0, 1, 2, 3, 4), (2, 0, 1, 3, 4, 5), (1, 0, 2, 3, 4, 5),
++                      (0, 1, 3, 2, 4, 5), (0, 1, 2, 4, 3, 5), (0, 1, 2, 3, 5, 4)):
++            with self.subTest(order=order), self.assertRaises(RuntimeError):
++                verify_worker_policy_timeline(text.replace(block, '\n'.join(events[i] for i in order), 1), required=True)
++
++    def test_original_policy_queue_and_open_records_are_required_unique(self):
++        text = policy_fixture()
++        for event in ('INTERACTIVE_ACTION_INFO_INPUT=2|2|1|0|1|1|0',
++                      'UI_WINDOW_INPUT=0|2|2|1|44|44|0|0|1|99',
++                      'INTERACTIVE_UI_QUEUED=17|0|-1|-1', 'INTERACTIVE_UI_OPENED=10|social-policy'):
++            for replacement in ('', event + '\n' + event, event + '|invalid'):
++                with self.subTest(event=event, replacement=replacement), self.assertRaises(RuntimeError):
++                    verify_worker_policy_timeline(text.replace(event, replacement, 1), required=True)
++
++    def test_original_policy_queue_and_shown_payloads_match_actor(self):
++        text = policy_fixture()
++        mutations = [('INTERACTIVE_UI_QUEUED=17|0|-1|-1', 'INTERACTIVE_UI_QUEUED=17|1|-1|-1'),
++                     ('INTERACTIVE_UI_QUEUED=17|0|-1|-1', 'INTERACTIVE_UI_QUEUED=17|0|0|-1'),
++                     ('INTERACTIVE_UI_QUEUED=17|0|-1|-1', 'INTERACTIVE_UI_QUEUED=17|0|-1|0'),
++                     ('INTERACTIVE_SOCIAL_POLICY_SHOWN=0|0|-1|1|1', 'INTERACTIVE_SOCIAL_POLICY_SHOWN=0|1|-1|1|1'),
++                     ('INTERACTIVE_SOCIAL_POLICY_SHOWN=0|0|-1|1|1', 'INTERACTIVE_SOCIAL_POLICY_SHOWN=0|0|0|1|1'),
++                     ('INTERACTIVE_UI_OPENED=10|social-policy', 'INTERACTIVE_UI_OPENED=0|social-policy'),
++                     ('INTERACTIVE_UI_OPENED=10|social-policy', 'INTERACTIVE_UI_OPENED=10|production')]
++        for before, after in mutations:
++            with self.subTest(after=after), self.assertRaises(RuntimeError):
++                verify_worker_policy_timeline(text.replace(before, after, 1), required=True)
++
++    def test_original_policy_callback_scope_and_timer_are_bound(self):
++        text = policy_fixture()
++        callback = 'INTERACTIVE_ACTION_INFO_INPUT=2|2|1|0|1|1|0'
++        timer = 'UI_WINDOW_INPUT=0|2|2|1|44|44|0|0|1|99'
++        for event, replacements in (
++                (callback, ('3|2|1|0|1|1|0', '2|3|1|0|1|1|0', '2|2|0|0|1|1|0',
++                            '2|2|1|1|1|1|0', '2|2|1|0|2|1|0', '2|2|1|0|1|0|0',
++                            '2|2|1|0|1|2|0', '2|2|1|0|1|1|1')),
++                (timer, ('31|2|2|1|44|44|0|0|1|99', '0|3|2|1|44|44|0|0|1|99',
++                         '0|2|3|1|44|44|0|0|1|99', '0|2|2|0|44|44|0|0|1|99',
++                         '0|2|2|1|44|45|0|0|1|99', '0|2|2|1|44|44|1|0|1|99',
++                         '0|2|2|1|44|44|0|1|1|99', '0|2|2|1|44|44|0|0|2|99',
++                         '0|2|2|1|44|44|0|0|1|0'))):
++            for replacement in replacements:
++                with self.subTest(event=event, replacement=replacement), self.assertRaises(RuntimeError):
++                    verify_worker_policy_timeline(text.replace(event, event.split('=')[0] + '=' + replacement, 1),
++                                                  required=True)
++
+     def test_zero_one_cycle_fresh_restore_and_same_turn_research(self):
+         for restored in (False, True):
+             for cycle in (False, True):
+@@ -768,6 +828,8 @@
+             for suffix, field in (('.lua', 'originalLua'), ('.xml', 'originalXml')):
+                 original = source_root / (name + suffix)
+                 source = folder / 'source_ui' / original.name; source.write_bytes(original.read_bytes())
++                if not hud:
++                    field = 'originalLayoutLua' if suffix == '.lua' else 'originalLayoutXml'
+                 sources.append(artifact(original)); references[field] = artifact(original)
+             bounds = dict(zip(('x', 'y', 'width', 'height'), (1584, 844, 320, 36) if hud else (100, 100, 100, 100)))
+             target = {'key': event['key'], 'id': {'hud': 'EndTurnButton', 'branch': 'BranchButton0', 'confirm': 'Yes', 'close': 'CloseButton'}[phase],
+@@ -807,6 +869,85 @@
+         self.assertEqual(len(proof['original_callbacks']), 4)
+         self.assertEqual(proof['sdk_inventories'][0]['opener_added'], 6)
+         self.assertFalse(proof['human_input_verified'])
++
++    def retained_hud_picking(self):
++        world_path = self.paths[0][2]
++        world = json.loads(world_path.read_text())
++        key = 0x5A57000000000000 | (1 << 32) | 612
++        pick = world_path.with_suffix('.pick')
++        packet = b'ZSTPICK1' + struct.pack('<IIIQII', 1920, 1080, 1, key, 1920 * 1080, 1)
++        world.update(pixelHitCount=1920 * 1080, pixelHitKeys=[key], pixelHitFile=pick.name,
++                     plots=[[612, 2, 3, 1, 1]])
++        world_path.write_text(json.dumps(world))
++        pick.write_bytes(packet)
++        self.generated = [artifact(p) for p in sorted(self.session.rglob('*')) if p.is_file()]
++        return world_path, world, pick, packet
++
++    def test_nonmodal_hud_preserves_valid_terrain_picking_below_its_hit(self):
++        world_path, world, pick, packet = self.retained_hud_picking()
++        proof = self.verify()
++        self.assertEqual(proof['original_callbacks'][0]['terrain_picking'], artifact(pick))
++        self.assertTrue(proof['original_callbacks'][0]['original_callback_and_frontmost_hit_verified'])
++
++    def test_nonmodal_hud_rejects_missing_or_corrupt_terrain_picking(self):
++        world_path, world, pick, packet = self.retained_hud_picking()
++        mutations = [({'pixelHitCount': 1}, packet),
++                     ({'pixelHitFile': 'foreign.pick'}, packet),
++                     ({'pixelHitKeys': []}, packet),
++                     ({'plots': [[612, 2, 3, 1, 0]]}, packet),
++                     ({}, packet[:-1]),
++                     ({}, packet[:-8] + struct.pack('<II', 1920 * 1080 - 1, 1))]
++        for changed, raw in mutations:
++            with self.subTest(changed=changed, bytes=len(raw)):
++                world_path.write_text(json.dumps({**world, **changed}))
++                pick.write_bytes(raw)
++                self.generated = [artifact(p) for p in sorted(self.session.rglob('*')) if p.is_file()]
++                with self.assertRaises(RuntimeError):
++                    self.verify()
++        world_path.write_text(json.dumps(world))
++        pick.unlink()
++        self.generated = [artifact(p) for p in sorted(self.session.rglob('*')) if p.is_file()]
++        with self.assertRaises((RuntimeError, FileNotFoundError)):
++            self.verify()
++
++    def test_modal_policy_keeps_exact_hits_and_no_terrain_picking(self):
++        world_path = self.paths[1][2]
++        world = json.loads(world_path.read_text())
++        for changed in ({'pixelHitCount': 1920 * 1080}, {'pixelHitKeys': [123]},
++                        {'pixelHitFile': 'foreign.pick'}, {'hits': list(reversed(world['hits'])) + [[999, 0, 0, 1, 1]]}):
++            with self.subTest(changed=changed):
++                world_path.write_text(json.dumps({**world, **changed}))
++                self.generated = [artifact(p) for p in sorted(self.session.rglob('*')) if p.is_file()]
++                with self.assertRaises(RuntimeError):
++                    self.verify()
++
++    def test_policy_source_uses_exact_original_layout_reference_contract(self):
++        snapshot, folder, world_path = self.paths[1]
++        baseline = json.loads(snapshot.read_text())
++        self.assertIn('originalLayoutLua', baseline['socialPolicy'])
++        self.assertIn('originalLayoutXml', baseline['socialPolicy'])
++        for field in ('originalLayoutLua', 'originalLayoutXml'):
++            for kind in ('legacy_field', 'bad_hash', 'wrong_source_name'):
++                document = copy.deepcopy(baseline)
++                meta = document['socialPolicy']
++                if kind == 'legacy_field':
++                    meta[field.replace('Layout', '')] = meta.pop(field)
++                elif kind == 'bad_hash':
++                    meta[field]['sha256'] = '0' * 64
++                else:
++                    meta[field]['path'] = 'TechTree.lua'
++                snapshot.write_text(json.dumps(document))
++                manifest_path = folder / 'scene_manifest.json'
++                manifest = json.loads(manifest_path.read_text())
++                manifest['snapshot'] = artifact(snapshot)
++                manifest_path.write_text(json.dumps(manifest))
++                for row in self.driver['scene_requests']:
++                    if row['sequence'] == 32:
++                        row['snapshot_before_sha256'] = row['snapshot_after_sha256'] = artifact(snapshot)['sha256']
++                        row['manifest'] = artifact(manifest_path)
++                self.generated = [artifact(p) for p in sorted(self.session.rglob('*')) if p.is_file()]
++                with self.subTest(field=field, kind=kind), self.assertRaises(RuntimeError):
++                    self.verify()
+ 
+     def test_unlisted_changed_or_foreign_inventory_rejected(self):
+         entry = next(row for row in self.generated if row['path'].endswith('before-inventory.json'))
+--- before/tools/verify_interactive_decisions.py
++++ after/tools/verify_interactive_decisions.py
+@@ -638,7 +638,9 @@
+             require(name + '.lua' in original_sources and name + '.xml' in original_sources,
+                     'Natural policy lacks original Lua/XML source copies')
+             meta = document.get('socialPolicy' if context == 'social-policy' else 'actionInfoPanel', {})
+-            for label, suffix in (('originalLua', '.lua'), ('originalXml', '.xml')):
++            labels = (('originalLayoutLua', '.lua'), ('originalLayoutXml', '.xml')) if context == 'social-policy' else \
++                     (('originalLua', '.lua'), ('originalXml', '.xml'))
++            for label, suffix in labels:
+                 ref = meta.get(label)
+                 require(type(ref) is dict and ref.get('sha256') == digest(original_sources[name + suffix]) and
+                         Path(ref.get('path', '')).name == name + suffix,
+@@ -666,11 +668,31 @@
+         require(len(worlds) == len(frame) == 1, "Natural callback has no unique committed world frame")
+         world_path, world = worlds[0]
+         require(world.get("turn") == event["turn"] and world.get("activePlayer") == event["owner"] and
+-                frame[0][2] == event["turn"] and frame[0][5] == int(native[0][5]) > 0 and
+-                (context == 'action-info-panel' or world.get("hits") == manifest.get("hit_regions")) and world.get("pixelHitCount", 0) == 0,
+-                "Natural popup lost its owner/turn/device or exact composed hit map")
++                frame[0][2] == event["turn"] and frame[0][5] == int(native[0][5]) > 0,
++                "Natural popup lost its owner/turn/device")
+         x, y = (coordinate * 1.5 for coordinate in event["client"])
+         require(0 <= x < 1920 and 0 <= y < 1080, "Natural callback coordinate escaped its owned window")
++        picking = None
++        if context == 'action-info-panel':
++            require(document.get('nonmodal') is True, 'Natural HUD lost its original nonmodal world composition')
++            pixel_count = world.get('pixelHitCount', 0)
++            require(type(pixel_count) is int and pixel_count in (0, 1920 * 1080),
++                    'Natural HUD has an invalid retained terrain raster size')
++            if pixel_count:
++                pick = world_path.with_suffix('.pick').resolve(strict=True)
++                require(world.get('pixelHitFile') == pick.name and pick.parent == world_path.parent,
++                        'Natural HUD terrain picking escaped its committed world identity')
++                # Validate the entire retained RLE raster and visible plot keys.
++                # The HUD rectangle remains the frontmost hit above this raster.
++                base.pixel_key(pick, world, x, y)
++                picking = artifact(pick)
++            else:
++                require(world.get('pixelHitKeys', []) == [] and world.get('pixelHitFile', '') == '',
++                        'Natural HUD has terrain keys/file without a raster')
++        else:
++            require(world.get('hits') == manifest.get('hit_regions') and world.get('pixelHitCount', 0) == 0 and
++                    world.get('pixelHitKeys', []) == [] and world.get('pixelHitFile', '') == '',
++                    'Natural modal popup lost its exact hit map or retained terrain picking')
+         front = next((hit for hit in reversed(world["hits"]) if hit[1] <= x < hit[3] and hit[2] <= y < hit[4]), None)
+         require(front is not None and front[0] == event.get('world_key', event["native_key"]),
+                 "Natural callback was not the original topmost committed hit")
+@@ -679,7 +701,8 @@
+             require(front[1:] == expected_hit[1:] and
+                     len([hit for hit in world['hits'] if hit[0] == event['world_key']]) == 1,
+                     'Natural policy HUD hit was not its exactly composed original packet geometry')
+-        bindings.append({**event, "snapshot": artifact(snapshot), "packet": artifact(packet),
++        bindings.append({**event, **({'terrain_picking': picking} if picking else {}),
++                         "snapshot": artifact(snapshot), "packet": artifact(packet),
+                          "manifest": artifact(manifest_path), "world_scene": artifact(world_path),
+                          "original_callback_and_frontmost_hit_verified": True})
+     return {**proof, "original_callbacks": bindings, "human_input_verified": False}

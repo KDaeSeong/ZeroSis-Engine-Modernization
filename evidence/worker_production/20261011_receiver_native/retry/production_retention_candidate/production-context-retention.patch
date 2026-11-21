@@ -1,0 +1,154 @@
+--- a/Source/Host/UiPopupContext.h
++++ b/Source/Host/UiPopupContext.h
+@@ -457,6 +457,14 @@
+         host_.Record("ui-popup-closed:"+std::to_string(sequence_)+":"+std::to_string(game_->GetGameTurn()));
+     }
+     bool IsActive() const {Require();return active_;}
++    bool CanReuseProductionFor(const ICvGameContext3& core,PlayerTypes activePlayer) const {
++        Require();
++        return kind_==UiPopupKind::Production && core_==&core && externalRouting_ &&
++            vm_ && !stopping_ && !active_ && !dispatching_ && !faulted_ && !timerRecoveryFailed_ &&
++            timerState_==TimerState::Released && scripts_.IsQuiescent() && game_ &&
++            productionOwner_==activePlayer && game_->GetActivePlayer()==activePlayer &&
++            !host_.deferCityPurchase && !purchaseCommand_ && !pendingPurchaseSound_;
++    }
+     int TechAwardTechnology() const {
+         Require();if(kind_!=UiPopupKind::TechAward || !active_)throw std::logic_error("No active original technology award");
+         return techAwardTechnology_;
+
+--- a/Source/Host/InteractiveUiSession.h
++++ b/Source/Host/InteractiveUiSession.h
+@@ -40,9 +40,10 @@
+             host_.closeInformationalPopup=[this](){Require();closePending_=true;};
+         }catch(...){host_.resolveCity={};host_.addPopup={};host_.addArrayPopup={};host_.addLeaderMessage={};host_.routeWarStateChanged={};host_.closeInformationalPopup={};throw;}
+     }
+-    ~InteractiveUiSession(){if(popup_ || suspendedCapture_ || suspendedCity_ || suspendedEconomic_ || unitPanel_ || topPanel_ || actionInfoPanel_ || notificationPanel_ || core_)std::terminate();}
++    ~InteractiveUiSession(){if(popup_ || idleProduction_ || suspendedCapture_ || suspendedCity_ || suspendedEconomic_ || unitPanel_ || topPanel_ || actionInfoPanel_ || notificationPanel_ || core_)std::terminate();}
+     void Stop(){
+         Require();stopping_=true;pending_.clear();leaderWarStates_.clear();closePending_=false;
++        DiscardIdleProduction();
+         if(HasEconomicContext())StopEconomicContexts();
+         if(popup_){popup_->Stop();popup_.reset();}
+         if(suspendedCity_){suspendedCity_->Stop();suspendedCity_.reset();}
+@@ -195,15 +196,13 @@
+             if(popup_->TakeCityProductionRequest(production)){
+                 if(suspendedCity_ || suspendedCapture_ || suspendedEconomic_)throw std::logic_error("City production cannot cover another retained parent");
+                 suspendedCity_=std::move(popup_);cityOpened_=opened_;
+-                const auto folder=directory_+L"\\play-context-"+std::to_wstring(++contextSequence_);
+-                if(!CreateDirectoryW(folder.c_str(),nullptr))throw std::runtime_error("Cannot allocate nested city production context");
+-                kind_=UiPopupKind::Production;popup_.reset(new UiPopupContext(owner_,*core_,folder,false,false,false,kind_,false,true));
++                PrepareProductionContext();
+                 popup_->Submit(production);opened_=std::chrono::steady_clock::now();changed=true;
+                 std::printf("INTERACTIVE_UI_OPENED=%u|production\n",contextSequence_);
+             }
+         }
+         if(popup_ && kind_==UiPopupKind::Production && !popup_->IsActive() && suspendedCity_){
+-            popup_->Stop();popup_.reset();popup_=std::move(suspendedCity_);
++            RetainOrStopCurrentPopup();popup_=std::move(suspendedCity_);
+             kind_=UiPopupKind::CityView;opened_=cityOpened_;popup_->ReturnFromCityProduction();changed=true;
+         }
+         if(popup_ && kind_==UiPopupKind::EconomicOverview && popup_->IsActive()){
+@@ -213,10 +212,7 @@
+                     if(city<0 || suspendedEconomic_ || suspendedCity_ || suspendedCapture_)
+                         throw std::logic_error("Economic production requires its sole retained overview parent");
+                     suspendedEconomic_=std::move(popup_);economicOpened_=opened_;
+-                    const auto folder=directory_+L"\\play-context-"+std::to_wstring(++contextSequence_);
+-                    if(!CreateDirectoryW(folder.c_str(),nullptr))throw std::runtime_error("Cannot allocate nested economic production context");
+-                    kind_=UiPopupKind::Production;
+-                    popup_.reset(new UiPopupContext(owner_,*core_,folder,false,false,false,kind_,false,true));
++                    PrepareProductionContext();
+                     popup_->Submit(CvPopupInfo(BUTTONPOPUP_CHOOSEPRODUCTION,city,-1,-1,0,false,false));
+                     opened_=std::chrono::steady_clock::now();changed=true;
+                     std::printf("INTERACTIVE_UI_OPENED=%u|production\nINTERACTIVE_ECONOMIC_PRODUCTION_OPENED=%d|%d|%d\n",
+@@ -226,7 +222,7 @@
+         }
+         if(popup_ && kind_==UiPopupKind::Production && !popup_->IsActive() && suspendedEconomic_){
+             try{
+-                popup_->Stop();popup_.reset();popup_=std::move(suspendedEconomic_);
++                RetainOrStopCurrentPopup();popup_=std::move(suspendedEconomic_);
+                 kind_=UiPopupKind::EconomicOverview;opened_=economicOpened_;
+                 popup_->RefreshEconomicOverview();changed=true;
+                 std::printf("INTERACTIVE_ECONOMIC_PRODUCTION_RETURNED=%d|%d\n",static_cast<int>(economicOwner_),economicTurn_);
+@@ -252,17 +248,20 @@
+                 if(!host_.pendingLeaderMessages)throw std::logic_error("Leader-head context closed without a pending message");
+                 --host_.pendingLeaderMessages;host_.leaderRootUp=false;
+             }
+-            popup_->Stop();popup_.reset();changed=true;
++            RetainOrStopCurrentPopup();changed=true;
+             if(kind_==UiPopupKind::EconomicOverview){economicOwner_=NO_PLAYER;economicTurn_=-1;}
+             if(hasDeferred)pending_.emplace_front(OwnedPopupInfo(deferred));
+         }
+         if(!popup_ && !pending_.empty()){
+             PendingEntry request=std::move(pending_.front());pending_.pop_front();
+             kind_=request.leader?UiPopupKind::LeaderHead:Kind(request.popup->type);
+-            const auto folder=directory_+L"\\play-context-"+std::to_wstring(++contextSequence_);
+-            if(!CreateDirectoryW(folder.c_str(),nullptr))
+-                throw std::runtime_error("Cannot allocate an immutable interactive UI context directory");
+-            popup_.reset(new UiPopupContext(owner_,*core_,folder,false,false,false,kind_,false,true));
++            if(kind_==UiPopupKind::Production)PrepareProductionContext();
++            else{
++                const auto folder=directory_+L"\\play-context-"+std::to_wstring(++contextSequence_);
++                if(!CreateDirectoryW(folder.c_str(),nullptr))
++                    throw std::runtime_error("Cannot allocate an immutable interactive UI context directory");
++                popup_.reset(new UiPopupContext(owner_,*core_,folder,false,false,false,kind_,false,true));
++            }
+             if(kind_==UiPopupKind::EconomicOverview){
+                 try{
+                     std::unique_ptr<ICvGame1> game(core_->GetGame());
+@@ -302,6 +301,7 @@
+         for(unsigned depth=0;popup_ && depth<2;++depth){CloseCurrent();Update();}
+         if(popup_ || suspendedCity_ || suspendedEconomic_)throw std::logic_error("Interactive close did not release its retained parent context");
+         if(host_.popupVisible)throw std::logic_error("Interactive UI close left a visible popup");
++        DiscardIdleProduction();
+     }
+     Frame Capture(){
+         Require();if(!popup_ || !popup_->IsActive())throw std::logic_error("No active interactive popup to capture");
+@@ -487,6 +487,38 @@
+         std::unique_ptr<ICvGame1> game(core_->GetGame());
+         return game && game->GetActivePlayer()==economicOwner_ && game->GetGameTurn()==economicTurn_;
+     }
++    void DiscardIdleProduction(){
++        if(idleProduction_){idleProduction_->Stop();idleProduction_.reset();}
++    }
++    void PrepareProductionContext(){
++        if(!core_)throw std::logic_error("Production reuse requires the current SDK session");
++        std::unique_ptr<ICvGame1> game(core_->GetGame());
++        if(!game)throw std::runtime_error("Production popup requires the current SDK game");
++        const auto activePlayer=game->GetActivePlayer();
++        const auto openSequence=++contextSequence_;
++        if(idleProduction_ && !idleProduction_->CanReuseProductionFor(*core_,activePlayer))
++            DiscardIdleProduction();
++        if(idleProduction_)popup_=std::move(idleProduction_);
++        else{
++            const auto folder=directory_+L"\\play-context-"+std::to_wstring(openSequence);
++            if(!CreateDirectoryW(folder.c_str(),nullptr))
++                throw std::runtime_error("Cannot allocate an immutable interactive UI context directory");
++            popup_.reset(new UiPopupContext(owner_,*core_,folder,false,false,false,UiPopupKind::Production,false,true));
++        }
++        kind_=UiPopupKind::Production;
++    }
++    void RetainOrStopCurrentPopup(){
++        if(!popup_)return;
++        bool retain=false;
++        if(kind_==UiPopupKind::Production && core_ && !host_.popupVisible){
++            std::unique_ptr<ICvGame1> game(core_->GetGame());
++            retain=game && popup_->CanReuseProductionFor(*core_,game->GetActivePlayer());
++        }
++        if(retain){
++            DiscardIdleProduction();
++            idleProduction_=std::move(popup_);
++        }else{popup_->Stop();popup_.reset();}
++    }
+     void StopEconomicContexts(){
+         if(suspendedEconomic_ && popup_ && kind_!=UiPopupKind::Production)
+             throw std::logic_error("Retained economic overview is covered by an unrelated popup");
+@@ -513,7 +545,7 @@
+         PendingWarState(unsigned sequence,const OwnedWarStateChanged& value):contextSequence(sequence),change(value){}
+     };
+     std::shared_ptr<HostState> owner_;HostState& host_;ICvGameContext3* core_;
+-    std::wstring directory_;std::unique_ptr<UiPopupContext> popup_,suspendedCapture_,suspendedCity_,suspendedEconomic_,unitPanel_,topPanel_,actionInfoPanel_,notificationPanel_;std::deque<PendingEntry> pending_;
++    std::wstring directory_;std::unique_ptr<UiPopupContext> popup_,idleProduction_,suspendedCapture_,suspendedCity_,suspendedEconomic_,unitPanel_,topPanel_,actionInfoPanel_,notificationPanel_;std::deque<PendingEntry> pending_;
+     std::deque<PendingWarState> leaderWarStates_;
+     UiPopupKind kind_=UiPopupKind::Ranking;unsigned contextSequence_=0;bool closePending_=false,stopping_=false;
+     PlayerTypes economicOwner_=NO_PLAYER;int economicTurn_=-1;
+

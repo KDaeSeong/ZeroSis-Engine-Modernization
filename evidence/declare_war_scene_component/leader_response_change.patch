@@ -1,0 +1,119 @@
+*** Begin Patch
+*** Update File: tools/ui_pixel_scene.py
+@@
+ # DIPLO_UI_STATE_DEFAULT_ROOT is ordinal 0 in DiploUIStateTypes in the frozen BNW CvEnums.h.
+ DIPLO_UI_STATE_DEFAULT_ROOT_ENUM_VALUE = 0
++# DIPLO_UI_STATE_WAR_DECLARED_BY_HUMAN follows DEFAULT_ROOT in that frozen enum.
++DIPLO_UI_STATE_WAR_DECLARED_BY_HUMAN_ENUM_VALUE = 1
+ # LEADERHEAD_ANIM_INTRO is explicitly 1 in LeaderheadAnimationTypes in that same header.
+ LEADERHEAD_ANIM_INTRO_ENUM_VALUE = 1
++# LEADERHEAD_ANIM_ATTACKED is explicitly 6 in the frozen BNW CvEnums.h.
++LEADERHEAD_ANIM_ATTACKED_ENUM_VALUE = 6
+ SCENE_CONTEXTS = ('production', 'research', 'research-tree', 'tech-award', 'city-capture', 'diplomacy', 'city-view', 'unit-panel', 'declare-war')
+ RESEARCH_CONTEXTS = ('research', 'research-tree')
+ 
+ 
++def valid_leader_message(message):
++    """Accept the original intro or the exact SDK human-declared-war response."""
++    if (type(message) is not dict or
++            any(type(message.get(name)) is not int
++                for name in ('player', 'state', 'animation', 'data1')) or
++            message['player'] < 0 or type(message.get('text')) is not str or
++            not message['text'].strip()):
++        return False
++    intro = (message['state'] == DIPLO_UI_STATE_DEFAULT_ROOT_ENUM_VALUE and
++             message['animation'] == LEADERHEAD_ANIM_INTRO_ENUM_VALUE)
++    declared_war = (
++        message['state'] == DIPLO_UI_STATE_WAR_DECLARED_BY_HUMAN_ENUM_VALUE and
++        message['animation'] == LEADERHEAD_ANIM_ATTACKED_ENUM_VALUE and
++        message['data1'] == 0)
++    return intro or declared_war
++
++
+ def valid_unit_panel_lifecycle(lifecycle, *, active):
+*** Update File: tools/interactive_ui_driver.py
+@@
+-from ui_pixel_scene import (DIPLO_UI_STATE_DEFAULT_ROOT_ENUM_VALUE,
+-                            LEADERHEAD_ANIM_INTRO_ENUM_VALUE,
+-                            valid_unit_panel_lifecycle, valid_declare_war_lifecycle)
++from ui_pixel_scene import (valid_leader_message, valid_unit_panel_lifecycle,
++                            valid_declare_war_lifecycle)
+@@
+         if context == 'diplomacy':
+             require(lifecycle == ['queued', 'closed'] and snapshot_doc.get('leaderRootUp') is False and
+-                    snapshot_doc.get('leaderMessage', {}).get('state') == DIPLO_UI_STATE_DEFAULT_ROOT_ENUM_VALUE and
+-                    snapshot_doc.get('leaderMessage', {}).get('animation') == LEADERHEAD_ANIM_INTRO_ENUM_VALUE,
++                    valid_leader_message(snapshot_doc.get('leaderMessage')),
+                     'Closed LeaderHead did not preserve the original response payload and return lifecycle')
+@@
+         require(snapshot_doc.get('timerSemaphore') == 0 and snapshot_doc.get('lifecycle') == ['queued'] and
+-                snapshot_doc.get('leaderRootUp') is True and type(message) is dict and
+-                all(type(message.get(name)) is int for name in ('player', 'state', 'animation', 'data1')) and
+-                message['player'] >= 0 and message['state'] == DIPLO_UI_STATE_DEFAULT_ROOT_ENUM_VALUE and
+-                message['animation'] == LEADERHEAD_ANIM_INTRO_ENUM_VALUE and
+-                isinstance(message.get('text'), str) and message['text'].strip() and
++                snapshot_doc.get('leaderRootUp') is True and valid_leader_message(message) and
+                 snapshot_doc.get('cursorSemanticsVerified') is False and
+                 snapshot_doc.get('retailLeaderRendererVerified') is False,
+-                'LeaderHead is not the original untimed DIPLO_UI_STATE_DEFAULT_ROOT/LEADERHEAD_ANIM_INTRO message')
++                'LeaderHead is not the original untimed intro or exact human-declared-war response')
+*** Update File: tools/render_ui_popup.py
+@@
+-from ui_pixel_scene import (Compiler, DIPLO_UI_STATE_DEFAULT_ROOT_ENUM_VALUE,
+-                            LEADERHEAD_ANIM_INTRO_ENUM_VALUE,
+-                            valid_unit_panel_lifecycle)
++from ui_pixel_scene import Compiler, valid_leader_message, valid_unit_panel_lifecycle
+@@
+-        require(type(message) is dict and all(type(message.get(name)) is int
+-                    for name in ('player', 'state', 'animation', 'data1')) and message['player'] >= 0 and
+-                message['state'] == DIPLO_UI_STATE_DEFAULT_ROOT_ENUM_VALUE and
+-                message['animation'] == LEADERHEAD_ANIM_INTRO_ENUM_VALUE and
+-                isinstance(message.get('text'), str) and message['text'].strip() and
++        require(valid_leader_message(message) and
+                 required['LeaderSpeech'].get('text') == message['text'] and
+                 snapshot.get('leaderRootUp') is True,
+-                'LeaderHead scene is not the original DIPLO_UI_STATE_DEFAULT_ROOT/LEADERHEAD_ANIM_INTRO message payload')
++                'LeaderHead scene is not the original intro or exact human-declared-war response payload')
+@@
+-                'leaderhead_display_policy': ('Original LeaderHeadRoot text and civ-symbol controls from retained DIPLO_UI_STATE_DEFAULT_ROOT with LEADERHEAD_ANIM_INTRO; original 3D leader model/animation not rendered; nested DiscussionDialog/DiploTrade callbacks unsupported'
++                'leaderhead_display_policy': ('Original LeaderHeadRoot text and civ-symbol controls from either DIPLO_UI_STATE_DEFAULT_ROOT/LEADERHEAD_ANIM_INTRO or DIPLO_UI_STATE_WAR_DECLARED_BY_HUMAN/LEADERHEAD_ANIM_ATTACKED with data1=0; original 3D leader model/animation not rendered; nested DiscussionDialog/DiploTrade callbacks unsupported'
+                                              if context == 'diplomacy' else None),
+@@
+-                    (['LeaderHeadRoot 3D leader model and LEADERHEAD_ANIM_INTRO animation are not rendered; only the original retained XML text/icon controls are represented',
++                    (['LeaderHeadRoot 3D leader model and response animation are not rendered; only the original retained XML text/icon controls are represented',
+*** Add File: Tests/leaderhead_message_contract.py
++"""Exercise the narrow original LeaderHead message tuple contract."""
++from pathlib import Path
++import sys
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
++from ui_pixel_scene import (DIPLO_UI_STATE_DEFAULT_ROOT_ENUM_VALUE,
++                            DIPLO_UI_STATE_WAR_DECLARED_BY_HUMAN_ENUM_VALUE,
++                            LEADERHEAD_ANIM_INTRO_ENUM_VALUE,
++                            LEADERHEAD_ANIM_ATTACKED_ENUM_VALUE,
++                            valid_leader_message)
++
++base = {'player': 1, 'state': DIPLO_UI_STATE_DEFAULT_ROOT_ENUM_VALUE,
++        'animation': LEADERHEAD_ANIM_INTRO_ENUM_VALUE, 'data1': 0,
++        'text': 'original leader speech'}
++assert valid_leader_message(base)
++
++war_response = dict(base, state=DIPLO_UI_STATE_WAR_DECLARED_BY_HUMAN_ENUM_VALUE,
++                    animation=LEADERHEAD_ANIM_ATTACKED_ENUM_VALUE)
++assert valid_leader_message(war_response)
++
++invalid_messages = (
++    dict(base, state=DIPLO_UI_STATE_WAR_DECLARED_BY_HUMAN_ENUM_VALUE),
++    dict(base, animation=LEADERHEAD_ANIM_ATTACKED_ENUM_VALUE),
++    dict(war_response, data1=1),
++    dict(war_response, state=2),
++    dict(war_response, player=-1),
++    dict(war_response, player=True),
++    dict(war_response, text=''),
++    dict(war_response, text=None),
++)
++for message in invalid_messages:
++    assert not valid_leader_message(message), message
++
++assert not valid_leader_message(None)
+*** End Patch

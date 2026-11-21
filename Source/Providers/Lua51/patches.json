@@ -1,0 +1,64 @@
+{
+  "format": 1,
+  "scope": "LUA51_X64_MD_PROVIDER_CANDIDATE",
+  "patches": [
+    {
+      "id": "lua51_01",
+      "file": "src/luaconf.h",
+      "source_sha256": "0410ff22f66c275ba8fcee1fa87a0749d26d7952ed30d3bc9161688b39775464",
+      "old": "\t\".\\\\?.dll;\"  LUA_CDIR\"?.dll;\" LUA_CDIR\"loadall.dll\"",
+      "new": "\t\".\\\\?.dll;\"  \".\\\\?51.dll;\"  LUA_CDIR\"?.dll;\" LUA_CDIR\"?51.dll;\" LUA_CDIR\"clibs\\\\?.dll;\" LUA_CDIR\"clibs\\\\?51.dll;\" LUA_CDIR\"loadall.dll;\" LUA_CDIR\"clibs\\\\loadall.dll\"",
+      "count": 1,
+      "reason": "Retain the SDK module search paths without changing Lua public types"
+    },
+    {
+      "id": "lua51_02",
+      "file": "src/luaconf.h",
+      "source_sha256": "0410ff22f66c275ba8fcee1fa87a0749d26d7952ed30d3bc9161688b39775464",
+      "old": "\t\"./?.so;\"  LUA_CDIR\"?.so;\" LUA_CDIR\"loadall.so\"",
+      "new": "\t\"./?.so;\"  \"./lib?51.so;\"  LUA_CDIR\"?.so;\" LUA_CDIR\"lib?51.so;\" LUA_CDIR\"loadall.so\"",
+      "count": 1,
+      "reason": "Retain the SDK module search paths without changing Lua public types"
+    },
+    {
+      "id": "lua51_03",
+      "file": "src/luaconf.h",
+      "source_sha256": "0410ff22f66c275ba8fcee1fa87a0749d26d7952ed30d3bc9161688b39775464",
+      "old": "#if defined(LUA_NUMBER_DOUBLE) && !defined(LUA_ANSI) && !defined(__SSE2__) && \\\n",
+      "new": "/* SDK x86 uses x87 FISTP. Match its current rounding mode on x64 SSE2. */\n#if defined(LUA_NUMBER_DOUBLE) && !defined(LUA_ANSI) && defined(_MSC_VER) && defined(_M_X64)\n#include <emmintrin.h>\n#define lua_number2int(i,d) ((i) = _mm_cvtsd_si32(_mm_set_sd(d)))\n#define lua_number2integer(i,n) ((i) = (lua_Integer)_mm_cvtsd_si64(_mm_set_sd(n)))\n#elif defined(LUA_NUMBER_DOUBLE) && !defined(LUA_ANSI) && !defined(__SSE2__) && \\\n",
+      "count": 1,
+      "reason": "Preserve measured x86 SDK rounding in all four modes; retain native-width Lua integers"
+    },
+    {
+      "id": "lua51_04",
+      "file": "src/lgc.c",
+      "source_sha256": "c0876e9ed23c43aa2de1ee3f77bdf6933b163a41456e2367a39880a7ea39ab96",
+      "old": "sizeof(Node) * sizenode(h)",
+      "new": "sizeof(Node) * cast(size_t, sizenode(h))",
+      "count": 1,
+      "reason": "Explicitly promote bounded node count to native allocation width after the original shift"
+    },
+    {
+      "id": "lua51_05",
+      "file": "src/ltable.c",
+      "source_sha256": "3a853ce89bf5e834ec53f2a0dd2386eb8b84accbe5fdc18dabd7515b819f0f7c",
+      "old": "luaM_freearray(L, nold, twoto(oldhsize), Node)",
+      "new": "luaM_freearray(L, nold, cast(size_t, twoto(oldhsize)), Node)",
+      "count": 1,
+      "reason": "Explicit native byte-count operand, retaining the original table-size bound"
+    },
+    {
+      "id": "lua51_06",
+      "file": "src/ltable.c",
+      "source_sha256": "3a853ce89bf5e834ec53f2a0dd2386eb8b84accbe5fdc18dabd7515b819f0f7c",
+      "old": "luaM_freearray(L, t->node, sizenode(t), Node)",
+      "new": "luaM_freearray(L, t->node, cast(size_t, sizenode(t)), Node)",
+      "count": 1,
+      "reason": "Explicit native byte-count operand, retaining the original table-size bound"
+    }
+  ],
+  "sdk_configuration": {
+    "path": "C:\\Users\\home\\OneDrive\\Documents\\Firaxis ModBuddy\\ZeroSis' Engine Modernization\\Source\\SDK_BNW_Original\\ThirdPartyLibs\\Lua51\\include\\luaconf.h",
+    "sha256": "eb725f6b494149feec64749ea0ae3f6677dcc9c60c747526ca94ae6a8f4cbd6f"
+  }
+}

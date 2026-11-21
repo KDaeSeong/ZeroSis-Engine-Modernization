@@ -1,0 +1,778 @@
+{
+  "status": "SDK_SAVE_RESTORE_PATCHES_PROPOSED_NOT_APPLIED",
+  "baseline": {
+    "path": "C:\\Users\\home\\OneDrive\\Documents\\Firaxis ModBuddy\\ZeroSis' Engine Modernization\\evidence\\sdk_x64\\attempts\\attempt_037\\sdk_x64_patches.json",
+    "sha256": "17b53b8623a75ba1c357962f82cc086d83f927327f9de96e7e133b57e259e873"
+  },
+  "recipe": {
+    "path": "C:\\Users\\home\\OneDrive\\Documents\\Firaxis ModBuddy\\ZeroSis' Engine Modernization\\tools\\define_save_restore_patches.py",
+    "sha256": "0c3b4ba890b2ac0e28285d0215224b0b8b535ef0824382b13faee1ed1c5b383a"
+  },
+  "baseline_patch_count": 693,
+  "added_patch_count": 19,
+  "patches": [
+    {
+      "id": "save_count_type_array_u32",
+      "file": "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+      "source_sha256": "6cea70f92f01236dedd032227d264d9223d5b2dfbef816d497c82b9baea0777d",
+      "old": "void WriteTypeArray(FDataStream& kStream, const std::vector<TType>& aiArray)\r\n{\r\n\tkStream << aiArray.size();",
+      "new": "void WriteTypeArray(FDataStream& kStream, const std::vector<TType>& aiArray)\r\n{\r\n\tkStream << CvChecked::Integer<unsigned int>(aiArray.size());",
+      "count": 1,
+      "reason": "Serialize the vector count as the legacy unsigned 32-bit field read by ReadTypeArrayDBLookup; reject a count that cannot be represented.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+        "line": 646,
+        "expression": "kStream << aiArray.size();",
+        "container_type": "std::vector<TType>",
+        "count_type": "size_t"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+        "line": 508,
+        "expression": "uint uiNumEntries;",
+        "container_type": "std::vector<TType>",
+        "count_type": "uint32"
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPreGame.cpp",
+          "expression": "CvInfosSerializationHelper::WriteTypeArray<MinorCivTypes>(saveTo, s_minorCivTypes);",
+          "line": 3206
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPreGame.cpp",
+          "expression": "CvInfosSerializationHelper::ReadTypeArrayDBLookup<MinorCivTypes>(loadFrom, s_minorCivTypes.dirtyGet(), \"MinorCivilizations\");",
+          "line": 1829
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPreGame.cpp",
+          "expression": "CvInfosSerializationHelper::WriteTypeArray<PlayerColorTypes>(saveTo, s_playerColors);",
+          "line": 3215
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPreGame.cpp",
+          "expression": "CvInfosSerializationHelper::ReadTypeArrayDBLookup<PlayerColorTypes>(loadFrom, s_playerColors.dirtyGet(), \"PlayerColors\");",
+          "line": 1844
+        }
+      ]
+    },
+    {
+      "id": "save_count_hashed_type_array_u32",
+      "file": "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+      "source_sha256": "6cea70f92f01236dedd032227d264d9223d5b2dfbef816d497c82b9baea0777d",
+      "old": "void WriteHashedTypeArray(FDataStream& kStream, const std::vector<TType>& aiArray)\r\n{\r\n\tkStream << aiArray.size();",
+      "new": "void WriteHashedTypeArray(FDataStream& kStream, const std::vector<TType>& aiArray)\r\n{\r\n\tkStream << CvChecked::Integer<unsigned int>(aiArray.size());",
+      "count": 1,
+      "reason": "Serialize the revealed-resource vector count as the legacy unsigned 32-bit field read by ReadHashedTypeArray; reject a count that cannot be represented.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+        "line": 658,
+        "expression": "kStream << aiArray.size();",
+        "container_type": "std::vector<TType>",
+        "count_type": "size_t"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+        "line": 439,
+        "expression": "uint uiNumEntries;",
+        "container_type": "std::vector<TType>",
+        "count_type": "uint32"
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvTeam.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedTypeArray(kStream, m_aeRevealedResources);",
+          "line": 7097
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvTeam.cpp",
+          "expression": "CvInfosSerializationHelper::ReadHashedTypeArray(kStream, m_aeRevealedResources);",
+          "line": 6975
+        }
+      ]
+    },
+    {
+      "id": "save_count_hashed_data_array_u32",
+      "file": "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+      "source_sha256": "6cea70f92f01236dedd032227d264d9223d5b2dfbef816d497c82b9baea0777d",
+      "old": "void WriteHashedDataArray(FDataStream& kStream, const std::vector<TData>& aArray)\r\n{\r\n\tkStream << aArray.size();",
+      "new": "void WriteHashedDataArray(FDataStream& kStream, const std::vector<TData>& aArray)\r\n{\r\n\tkStream << CvChecked::Integer<unsigned int>(aArray.size());",
+      "count": 1,
+      "reason": "Serialize the std::vector data-array count as the legacy unsigned 32-bit field read by ReadHashedDataArray; reject a count that cannot be represented.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+        "line": 588,
+        "expression": "kStream << aArray.size();",
+        "container_type": "std::vector<TData>",
+        "count_type": "size_t"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+        "line": 391,
+        "expression": "uint uiNumEntries;",
+        "container_type": "std::vector<TData>",
+        "count_type": "uint32"
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<ResourceTypes>(kStream, m_aiResourceQuantityModifier);",
+          "line": 2969
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+          "expression": "CvInfosSerializationHelper::ReadHashedDataArray(kStream, m_aiResourceQuantityModifier);",
+          "line": 2784
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<ResourceTypes, int>(kStream, m_paiNumResourceUsed);",
+          "line": 22616
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<ResourceTypes, int>(kStream, m_paiNumResourceTotal);",
+          "line": 22617
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<ResourceTypes, int>(kStream, m_paiResourceGiftedToMinors);",
+          "line": 22618
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<ResourceTypes, int>(kStream, m_paiResourceExport);",
+          "line": 22619
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<ResourceTypes, int>(kStream, m_paiResourceImport);",
+          "line": 22620
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<ResourceTypes, int>(kStream, m_paiResourceFromMinors);",
+          "line": 22621
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<ResourceTypes, int>(kStream, m_paiResourcesSiphoned);",
+          "line": 22622
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<BuildingTypes, int>(kStream, m_paiFreeBuildingCount);",
+          "line": 22626
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<PromotionTypes, int>(kStream, m_paiFreePromotionCount);",
+          "line": 22628
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvCity.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<ResourceTypes, int>(kStream, m_paiNoResource);",
+          "line": 13887
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvCity.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<ResourceTypes, int>(kStream, m_paiFreeResource);",
+          "line": 13888
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvCity.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<ResourceTypes, int>(kStream, m_paiNumResourcesLocal);",
+          "line": 13889
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvCity.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<UnitTypes, int>(kStream, m_paiUnitProduction);",
+          "line": 13896
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvCity.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<UnitTypes, int>(kStream, m_paiUnitProductionTime);",
+          "line": 13897
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvCity.cpp",
+          "expression": "CvInfosSerializationHelper::WriteHashedDataArray<PromotionTypes, int>(kStream, m_paiFreePromotionCount);",
+          "line": 13907
+        }
+      ]
+    },
+    {
+      "id": "save_count_helper_checked_include",
+      "file": "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+      "source_sha256": "6cea70f92f01236dedd032227d264d9223d5b2dfbef816d497c82b9baea0777d",
+      "old": "#pragma once\r\n",
+      "new": "#pragma once\r\n#include \"CvCheckedNarrow.h\"\r\n",
+      "count": 1,
+      "reason": "Declare CvChecked::Integer in the template header itself so every including translation unit can parse the checked count writers.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+        "line": 588,
+        "expression": "kStream << aArray.size();",
+        "container_type": "std::vector<TData>",
+        "count_type": "size_t"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+        "line": 391,
+        "expression": "uint uiNumEntries;",
+        "container_type": "std::vector<TData>",
+        "count_type": "uint32"
+      }
+    },
+    {
+      "id": "save_count_maya_bonus_choices_i32",
+      "file": "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+      "source_sha256": "8e5c3fe9ad40e44e2ad9a16e9ea590ff13ced2b51925f96b280495d82fec8edc",
+      "old": "kStream << m_aMayaBonusChoices.size();",
+      "new": "kStream << CvChecked::Integer<int>(m_aMayaBonusChoices.size());",
+      "count": 1,
+      "reason": "Preserve the legacy signed 32-bit count consumed by CvPlayerTraits::Read for the std::vector Maya choice list.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+        "line": 2944,
+        "expression": "kStream << m_aMayaBonusChoices.size();",
+        "container_type": "std::vector<MayaBonusChoice>",
+        "count_type": "size_t"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+        "line": 2698,
+        "expression": "kStream >> iNumEntries;",
+        "container_type": "std::vector<MayaBonusChoice>",
+        "count_type": "int32",
+        "read_function": "CvPlayerTraits::Read"
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "m_pTraits->Write(kStream);",
+          "line": 22665
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "m_pTraits->Read(kStream);",
+          "line": 22219
+        }
+      ]
+    },
+    {
+      "id": "save_count_no_train_i32",
+      "file": "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+      "source_sha256": "8e5c3fe9ad40e44e2ad9a16e9ea590ff13ced2b51925f96b280495d82fec8edc",
+      "old": "kStream << m_abNoTrain.size();",
+      "new": "kStream << CvChecked::Integer<int>(m_abNoTrain.size());",
+      "count": 1,
+      "reason": "Preserve the legacy signed 32-bit count consumed by CvPlayerTraits::Read for the std::vector<bool> train mask.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+        "line": 2971,
+        "expression": "kStream << m_abNoTrain.size();",
+        "container_type": "std::vector<bool>",
+        "count_type": "size_t"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+        "line": 2786,
+        "expression": "kStream >> iNumEntries;",
+        "container_type": "std::vector<bool>",
+        "count_type": "int32",
+        "read_function": "CvPlayerTraits::Read"
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "m_pTraits->Write(kStream);",
+          "line": 22665
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "m_pTraits->Read(kStream);",
+          "line": 22219
+        }
+      ]
+    },
+    {
+      "id": "save_count_dig_complete_plots_i32",
+      "file": "CvGameCoreDLL_Expansion2/CvCultureClasses.cpp",
+      "source_sha256": "455e48e7055fc23f891b691b9a07691916f6e48ec28f2974f19086ec69a2651b",
+      "old": "saveTo << readFrom.m_aDigCompletePlots.size();",
+      "new": "saveTo << CvChecked::Integer<int>(readFrom.m_aDigCompletePlots.size());",
+      "count": 1,
+      "reason": "Preserve the legacy signed 32-bit plot count consumed by CvPlayerCulture::operator>> for the std::vector of completed dig sites.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvCultureClasses.cpp",
+        "line": 3922,
+        "expression": "saveTo << readFrom.m_aDigCompletePlots.size();",
+        "container_type": "std::vector<CvPlot*>",
+        "count_type": "size_t"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvCultureClasses.cpp",
+        "line": 3832,
+        "expression": "loadFrom >> iEntriesToRead;",
+        "container_type": "std::vector<CvPlot*>",
+        "count_type": "int32",
+        "read_function": "operator>>(CvPlayerCulture&)"
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream << *m_pCulture;",
+          "line": 22671
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream >> *m_pCulture;",
+          "line": 22225
+        }
+      ]
+    },
+    {
+      "id": "save_count_diplomacy_requests_u32",
+      "file": "CvGameCoreDLL_Expansion2/CvDiplomacyRequests.cpp",
+      "source_sha256": "43b2530e35c845669136f0d2f0684d06a3c08bd639bca8f8dab82685d1f42529",
+      "old": "kStream << m_aRequests.size();",
+      "new": "kStream << CvChecked::Integer<unsigned int>(m_aRequests.size());",
+      "count": 1,
+      "reason": "Preserve the legacy unsigned 32-bit request-list count while rejecting an unrepresentable std::list size. The current CvPlayer Read/Write integration is disabled, but this paired serializer API must remain wire-compatible if used.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvDiplomacyRequests.cpp",
+        "expression": "kStream << m_aRequests.size();",
+        "container_type": "std::list<Request>",
+        "count_type": "size_t",
+        "line": 121
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvDiplomacyRequests.cpp",
+        "expression": "kStream >> uiListSize;",
+        "container_type": "std::list<Request>",
+        "count_type": "uint32",
+        "read_function": "CvDiplomacyRequests::Read",
+        "line": 99
+      },
+      "caller_evidence": []
+    },
+    {
+      "id": "save_count_spy_name_order_i32",
+      "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+      "source_sha256": "24e930bd1892b9692815c0e9bddee76b0c0bf68a3dc0792715a4f5a396ceabfd",
+      "old": "saveTo << readFrom.m_aiSpyListNameOrder.size();",
+      "new": "saveTo << CvChecked::Integer<int>(readFrom.m_aiSpyListNameOrder.size());",
+      "count": 1,
+      "reason": "Preserve the legacy signed 32-bit count consumed by CvPlayerEspionage::operator>> for the std::vector spy-name order.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+        "line": 3725,
+        "expression": "saveTo << readFrom.m_aiSpyListNameOrder.size();",
+        "container_type": "std::vector<int>",
+        "count_type": "size_t"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+        "line": 3618,
+        "expression": "loadFrom >> iNumSpyNames;",
+        "container_type": "std::vector<int>",
+        "count_type": "int32",
+        "read_function": "operator>>(CvPlayerEspionage&)"
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream << *m_pEspionage;",
+          "line": 22666
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream >> *m_pEspionage;",
+          "line": 22220
+        }
+      ]
+    },
+    {
+      "id": "save_count_heist_locations_i32",
+      "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+      "source_sha256": "24e930bd1892b9692815c0e9bddee76b0c0bf68a3dc0792715a4f5a396ceabfd",
+      "old": "saveTo << readFrom.m_aHeistLocations[uiCiv].size();",
+      "new": "saveTo << CvChecked::Integer<int>(readFrom.m_aHeistLocations[uiCiv].size());",
+      "count": 1,
+      "reason": "Preserve each legacy signed 32-bit count consumed by CvPlayerEspionage::operator>> for the per-civilization std::vector of heist locations.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+        "line": 3758,
+        "expression": "saveTo << readFrom.m_aHeistLocations[uiCiv].size();",
+        "container_type": "std::vector<HeistLocation>",
+        "count_type": "size_t",
+        "instances_per_save": "MAX_MAJOR_CIVS"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+        "line": 3667,
+        "expression": "loadFrom >> iNumEntries;",
+        "container_type": "std::vector<HeistLocation>",
+        "count_type": "int32",
+        "read_function": "operator>>(CvPlayerEspionage&)"
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream << *m_pEspionage;",
+          "line": 22666
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream >> *m_pEspionage;",
+          "line": 22220
+        }
+      ]
+    },
+    {
+      "id": "save_count_spy_notification_messages_i32",
+      "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+      "source_sha256": "24e930bd1892b9692815c0e9bddee76b0c0bf68a3dc0792715a4f5a396ceabfd",
+      "old": "saveTo << readFrom.m_aSpyNotificationMessages.size();",
+      "new": "saveTo << CvChecked::Integer<int>(readFrom.m_aSpyNotificationMessages.size());",
+      "count": 1,
+      "reason": "Preserve the legacy signed 32-bit count consumed by CvPlayerEspionage::operator>> for spy notification messages.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+        "line": 3766,
+        "expression": "saveTo << readFrom.m_aSpyNotificationMessages.size();",
+        "container_type": "std::vector<SpyNotificationMessage>",
+        "count_type": "size_t"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+        "line": 3678,
+        "expression": "loadFrom >> iNumMessages;",
+        "container_type": "std::vector<SpyNotificationMessage>",
+        "count_type": "int32",
+        "read_function": "operator>>(CvPlayerEspionage&)"
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream << *m_pEspionage;",
+          "line": 22666
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream >> *m_pEspionage;",
+          "line": 22220
+        }
+      ]
+    },
+    {
+      "id": "save_count_intrigue_notification_messages_i32",
+      "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+      "source_sha256": "24e930bd1892b9692815c0e9bddee76b0c0bf68a3dc0792715a4f5a396ceabfd",
+      "old": "saveTo << readFrom.m_aIntrigueNotificationMessages.size();",
+      "new": "saveTo << CvChecked::Integer<int>(readFrom.m_aIntrigueNotificationMessages.size());",
+      "count": 1,
+      "reason": "Preserve the legacy signed 32-bit count consumed by CvPlayerEspionage::operator>> for intrigue notification messages.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+        "line": 3776,
+        "expression": "saveTo << readFrom.m_aIntrigueNotificationMessages.size();",
+        "container_type": "std::vector<IntrigueNotificationMessage>",
+        "count_type": "size_t"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+        "line": 3690,
+        "expression": "loadFrom >> iNumMessages;",
+        "container_type": "std::vector<IntrigueNotificationMessage>",
+        "count_type": "int32",
+        "read_function": "operator>>(CvPlayerEspionage&)"
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream << *m_pEspionage;",
+          "line": 22666
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream >> *m_pEspionage;",
+          "line": 22220
+        }
+      ]
+    },
+    {
+      "id": "restore_espionage_ai_static_vectors_before_read",
+      "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+      "source_sha256": "24e930bd1892b9692815c0e9bddee76b0c0bf68a3dc0792715a4f5a396ceabfd",
+      "old": "// serialization read\r\nFDataStream& operator>>(FDataStream& loadFrom, CvEspionageAI& writeTo)\r\n{\r\n\tuint uiVersion;\r\n\tloadFrom >> uiVersion;\r\n\r\n\tuint uiCount;\r\n\tloadFrom >> uiCount;\r\n\tint iValue;\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiCivOutOfTechTurn.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> uiCount;\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiNumSpiesCaught.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> uiCount;\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiNumSpiesKilled.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> uiCount;\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiNumSpiesDied.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> uiCount;\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiTurnLastSpyCaught.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> uiCount;\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiTurnLastSpyKilled.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> uiCount;\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiTurnLastSpyDied.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> writeTo.m_bUNCountdownStarted;\r\n\tloadFrom >> writeTo.m_iTurnEspionageStarted;\r\n\t\r\n\treturn loadFrom;\r\n}",
+      "new": "// serialization read\r\nFDataStream& operator>>(FDataStream& loadFrom, CvEspionageAI& writeTo)\r\n{\r\n\tuint uiVersion;\r\n\tloadFrom >> uiVersion;\r\n\r\n\tuint uiCount;\r\n\tloadFrom >> uiCount;\r\n\twriteTo.m_aiCivOutOfTechTurn.clear();\r\n\tint iValue;\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiCivOutOfTechTurn.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> uiCount;\r\n\twriteTo.m_aiNumSpiesCaught.clear();\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiNumSpiesCaught.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> uiCount;\r\n\twriteTo.m_aiNumSpiesKilled.clear();\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiNumSpiesKilled.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> uiCount;\r\n\twriteTo.m_aiNumSpiesDied.clear();\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiNumSpiesDied.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> uiCount;\r\n\twriteTo.m_aiTurnLastSpyCaught.clear();\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiTurnLastSpyCaught.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> uiCount;\r\n\twriteTo.m_aiTurnLastSpyKilled.clear();\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiTurnLastSpyKilled.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> uiCount;\r\n\twriteTo.m_aiTurnLastSpyDied.clear();\r\n\tfor(uint ui = 0; ui < uiCount; ui++)\r\n\t{\r\n\t\tloadFrom >> iValue;\r\n\t\twriteTo.m_aiTurnLastSpyDied.push_back(iValue);\r\n\t}\r\n\r\n\tloadFrom >> writeTo.m_bUNCountdownStarted;\r\n\tloadFrom >> writeTo.m_iTurnEspionageStarted;\r\n\t\r\n\treturn loadFrom;\r\n}",
+      "count": 1,
+      "reason": "Replace the seven MAX_MAJOR_CIVS defaults established by CvEspionageAI::Init/Reset before reading their serialized values; do not append a second set of entries.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+        "expression": "saveTo << readFrom.m_aiCivOutOfTechTurn.size();",
+        "container_type": "FStaticVector<int, MAX_MAJOR_CIVS>",
+        "count_type": "uint",
+        "line": 5560
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+        "expression": "writeTo.m_aiCivOutOfTechTurn.push_back(iValue);",
+        "container_type": "FStaticVector<int, MAX_MAJOR_CIVS>",
+        "count_type": "uint",
+        "read_function": "operator>>(CvEspionageAI&)",
+        "line": 5503
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "m_pEspionageAI->Init(this);",
+          "line": 1205
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream >> *m_pEspionageAI;",
+          "line": 22221
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream << *m_pEspionageAI;",
+          "line": 22667
+        }
+      ]
+    },
+    {
+      "id": "save_count_diplomacy_requests_checked_include",
+      "file": "CvGameCoreDLL_Expansion2/CvDiplomacyRequests.cpp",
+      "source_sha256": "43b2530e35c845669136f0d2f0684d06a3c08bd639bca8f8dab82685d1f42529",
+      "old": "#include \"CvDiplomacyRequests.h\"\r\n",
+      "new": "#include \"CvDiplomacyRequests.h\"\r\n#include \"CvCheckedNarrow.h\"\r\n",
+      "count": 1,
+      "reason": "Make the checked 32-bit size conversion explicit in the serializer translation unit.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvDiplomacyRequests.cpp",
+        "line": 121,
+        "expression": "kStream << m_aRequests.size();",
+        "container_type": "std::list<Request>",
+        "count_type": "size_t"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvDiplomacyRequests.cpp",
+        "line": 99,
+        "expression": "kStream >> uiListSize;",
+        "container_type": "std::list<Request>",
+        "count_type": "uint32"
+      }
+    },
+    {
+      "id": "save_count_dig_complete_plots_checked_include",
+      "file": "CvGameCoreDLL_Expansion2/CvCultureClasses.cpp",
+      "source_sha256": "455e48e7055fc23f891b691b9a07691916f6e48ec28f2974f19086ec69a2651b",
+      "old": "#include \"CvGameCoreDLLPCH.h\"\r\n",
+      "new": "#include \"CvGameCoreDLLPCH.h\"\r\n#include \"CvCheckedNarrow.h\"\r\n",
+      "count": 1,
+      "reason": "Make the checked 32-bit size conversion explicit in the culture serializer translation unit.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvCultureClasses.cpp",
+        "line": 3922,
+        "expression": "saveTo << readFrom.m_aDigCompletePlots.size();",
+        "container_type": "std::vector<CvPlot*>",
+        "count_type": "size_t"
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvCultureClasses.cpp",
+        "line": 3832,
+        "expression": "loadFrom >> iEntriesToRead;",
+        "container_type": "std::vector<CvPlot*>",
+        "count_type": "int32"
+      }
+    },
+    {
+      "id": "initialize_military_player_arrays_with_player_bound",
+      "file": "CvGameCoreDLL_Expansion2/CvMilitaryAI.cpp",
+      "source_sha256": "b5df85f78088a7df45303e4330b6e93146401643907706a213a38d90cc52d622",
+      "old": "\t\tm_paiTurnStrategyAdopted[iI] = -1;\r\n\t\tm_paeLastTurnWarState[iI] = NO_WAR_STATE_TYPE;",
+      "new": "\t\tm_paiTurnStrategyAdopted[iI] = -1;\r\n\t}\r\n\r\n\t// These four arrays are indexed by player, independently of strategy count.\r\n\tfor(iI = 0; iI < MAX_CIV_PLAYERS; iI++)\r\n\t{\r\n\t\tm_paeLastTurnWarState[iI] = NO_WAR_STATE_TYPE;",
+      "count": 1,
+      "reason": "Reset the four MAX_CIV_PLAYERS diplomacy-history arrays over their allocated player bound. The original strategy-count loop left serialized tails uninitialized for fewer strategies and could overrun them for more strategies.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvMilitaryAI.cpp",
+        "expression": "kStream << ArrayWrapper<int>(MAX_CIV_PLAYERS, m_paeLastTurnMilitaryStrength);",
+        "line": 414
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvMilitaryAI.cpp",
+        "expression": "ArrayWrapper<int> wrapm_paeLastTurnMilitaryStrength(MAX_CIV_PLAYERS, m_paeLastTurnMilitaryStrength);",
+        "line": 391
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "m_pMilitaryAI->Write(kStream);",
+          "line": 22651
+        }
+      ]
+    },
+    {
+      "id": "initialize_culture_public_opinion_before_first_save",
+      "file": "CvGameCoreDLL_Expansion2/CvCultureClasses.cpp",
+      "source_sha256": "455e48e7055fc23f891b691b9a07691916f6e48ec28f2974f19086ec69a2651b",
+      "old": "\tm_iLastTurnLifetimeCulture = 0;\r\n\tm_iOpinionUnhappiness = 0;",
+      "new": "\tm_iLastTurnLifetimeCulture = 0;\r\n\tm_eOpinion = NO_PUBLIC_OPINION;\r\n\tm_ePreferredIdeology = NO_POLICY_BRANCH_TYPE;\r\n\tm_eOpinionBiggestInfluence = NO_PLAYER;\r\n\tm_iOpinionUnhappiness = 0;\r\n\tm_strOpinionTooltip = \"\";\r\n\tm_strOpinionUnhappinessTooltip = \"\";",
+      "count": 1,
+      "reason": "Initialize public-opinion fields to the existing DoPublicOpinion/legacy-reader defaults before any player can be saved, including inactive slots which have not executed a turn. Clear associated derived tooltips on reinitialization.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvCultureClasses.cpp",
+        "expression": "saveTo << readFrom.m_eOpinion;",
+        "line": 3941
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvCultureClasses.cpp",
+        "expression": "writeTo.m_eOpinion = (PublicOpinionTypes)iTemp;",
+        "line": 3864
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "kStream << *m_pCulture;",
+          "line": 22671
+        }
+      ]
+    },
+    {
+      "id": "initialize_optional_trait_combat_improvement",
+      "file": "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+      "source_sha256": "8e5c3fe9ad40e44e2ad9a16e9ea590ff13ced2b51925f96b280495d82fec8edc",
+      "old": "\tm_eFreeUnitPrereqTech(NO_TECH),\r\n\tm_eFreeBuilding(NO_BUILDING),",
+      "new": "\tm_eFreeUnitPrereqTech(NO_TECH),\r\n\tm_eCombatBonusImprovement(NO_IMPROVEMENT),\r\n\tm_eFreeBuilding(NO_BUILDING),",
+      "count": 1,
+      "reason": "Initialize the optional CombatBonusImprovement field in each newly allocated trait entry. CacheResults only assigns non-NULL database values; InitPlayerTraits otherwise copies an indeterminate enum over the player's existing NO_IMPROVEMENT default.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+        "expression": "kStream << m_eCombatBonusImprovement;",
+        "line": 2958
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+        "expression": "kStream >> m_eCombatBonusImprovement;",
+        "line": 2747
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+          "expression": "m_eCombatBonusImprovement = trait->GetCombatBonusImprovement();",
+          "line": 1535
+        }
+      ]
+    },
+    {
+      "id": "initialize_operation_reinforcement_flag_in_reset",
+      "file": "CvGameCoreDLL_Expansion2/CvAIOperation.cpp",
+      "source_sha256": "4cfe29c8279755aecd32d436482cd0d0e6bde5eeeeb478df04c1c1f5a925cb97",
+      "old": "\tm_iDefaultArea = FFreeList::INVALID_INDEX;\r\n\tm_eCurrentState = AI_OPERATION_STATE_ABORTED;",
+      "new": "\tm_iDefaultArea = FFreeList::INVALID_INDEX;\r\n\tm_bShouldReplaceLossesWithReinforcements = false;\r\n\tm_eCurrentState = AI_OPERATION_STATE_ABORTED;",
+      "count": 1,
+      "reason": "Initialize the serialized reinforcement-replacement flag in Reset. CvAIOperationBasicCityAttack::Init is a virtual override that calls Reset directly and does not call CvAIOperation::Init, so the base Init assignment is bypassed for this common operation; without this default, the bool serialized by CvAIOperation::Write remains indeterminate.",
+      "writer_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvAIOperation.cpp",
+        "expression": "kStream << m_bShouldReplaceLossesWithReinforcements;",
+        "field": "m_bShouldReplaceLossesWithReinforcements",
+        "serialized_type": "bool",
+        "line": 1176
+      },
+      "reader_evidence": {
+        "file": "CvGameCoreDLL_Expansion2/CvAIOperation.cpp",
+        "expression": "kStream >> m_bShouldReplaceLossesWithReinforcements;",
+        "field": "m_bShouldReplaceLossesWithReinforcements",
+        "serialized_type": "bool",
+        "line": 1150
+      },
+      "caller_evidence": [
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+          "expression": "pNewOperation->Init(m_iNextOperationID, m_eID, eEnemy, iArea, pTarget, pMuster);",
+          "dispatch": "virtual Init after CreateOperation",
+          "line": 19360
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvAIOperation.cpp",
+          "expression": "void CvAIOperationBasicCityAttack::Init(",
+          "behavior": "override calls Reset without base CvAIOperation::Init",
+          "line": 2071
+        },
+        {
+          "file": "CvGameCoreDLL_Expansion2/CvAIOperation.cpp",
+          "expression": "m_bShouldReplaceLossesWithReinforcements = false;",
+          "behavior": "base Init default bypassed by BasicCityAttack override",
+          "line": 54
+        }
+      ]
+    }
+  ],
+  "target_files": [
+    "CvGameCoreDLL_Expansion2/CvAIOperation.cpp",
+    "CvGameCoreDLL_Expansion2/CvCultureClasses.cpp",
+    "CvGameCoreDLL_Expansion2/CvDiplomacyRequests.cpp",
+    "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+    "CvGameCoreDLL_Expansion2/CvInfosSerializationHelper.h",
+    "CvGameCoreDLL_Expansion2/CvMilitaryAI.cpp",
+    "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp"
+  ],
+  "translation_units": [
+    "CvGameCoreDLL_Expansion2/CvPreGame.cpp",
+    "CvGameCoreDLL_Expansion2/CvTeam.cpp",
+    "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp",
+    "CvGameCoreDLL_Expansion2/CvCultureClasses.cpp",
+    "CvGameCoreDLL_Expansion2/CvDiplomacyRequests.cpp",
+    "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+    "CvGameCoreDLL_Expansion2/CvCity.cpp",
+    "CvGameCoreDLL_Expansion2/CvEspionageClasses.cpp",
+    "CvGameCoreDLL_Expansion2/CvMilitaryAI.cpp",
+    "CvGameCoreDLL_Expansion2/CvAIOperation.cpp"
+  ],
+  "template_specialization_audit": [
+    {
+      "template": "WriteTypeArray(std::vector<TType>)",
+      "specializations": [
+        "MinorCivTypes",
+        "PlayerColorTypes"
+      ],
+      "translation_units": [
+        "CvGameCoreDLL_Expansion2/CvPreGame.cpp"
+      ]
+    },
+    {
+      "template": "WriteHashedTypeArray(std::vector<TType>)",
+      "specializations": [
+        "ResourceTypes"
+      ],
+      "translation_units": [
+        "CvGameCoreDLL_Expansion2/CvTeam.cpp"
+      ]
+    },
+    {
+      "template": "WriteHashedDataArray(std::vector<TData>)",
+      "specializations": [
+        "ResourceTypes,int",
+        "BuildingTypes,int",
+        "PromotionTypes,int",
+        "UnitTypes,int"
+      ],
+      "argument_forms": [
+        "std::vector<int>",
+        "FAutoVariable<std::vector<int>> via operator const ObjectType&()"
+      ],
+      "translation_units": [
+        "CvGameCoreDLL_Expansion2/CvPlayer.cpp",
+        "CvGameCoreDLL_Expansion2/CvCity.cpp",
+        "CvGameCoreDLL_Expansion2/CvTraitClasses.cpp"
+      ]
+    }
+  ],
+  "wire_contract": "Affected legacy counts remain 32-bit int/uint; restored vectors replace defaults, new-game state uses existing SDK sentinel values, and no save schema/version changes.",
+  "sdk_source_modified": false,
+  "gamecore_loaded": false,
+  "game_launched": false
+}

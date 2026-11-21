@@ -1,0 +1,33 @@
+--- checker_abbe9a1f.py
++++ checker_ef3eb4c2.py
+@@ -101,6 +101,16 @@
+             type(row['bytes']) is int and row['bytes'] >= 0 and is_sha(row['sha256']),
+             'Malformed artifact identity')
+     return row
++
++
++def report_reference_matches(row, expected):
++    """Accept the production artifact API while retaining scoped size checks."""
++    valid_ref(expected)
++    if type(row) is not dict or set(row) not in ({'path', 'sha256'}, {'path', 'bytes', 'sha256'}):
++        return False
++    return (isinstance(row.get('path'), str) and Path(row['path']).is_absolute() and
++            key(row['path']) == key(expected['path']) and row.get('sha256') == expected['sha256'] and
++            ('bytes' not in row or type(row['bytes']) is int and row['bytes'] == expected['bytes']))
+ 
+ 
+ def sealed(row, limit=MAX_HEADER):
+@@ -815,10 +825,10 @@
+         require(arrays['SharedFontMetrics'] == expected_bank_bytes,
+                 'Actual shared bank bytes differ from independently reconstructed full original glyph metrics')
+         prepared = read_json(scope['prepared_assets']['path'], MAX_PREPARED)
+-        require(prepared.get('compiled_assets') == scope['generated_header'], 'Prepared metadata names a different header')
++        require(report_reference_matches(prepared.get('compiled_assets'), scope['generated_header']), 'Prepared metadata names a different header')
+         prepared_profile = prepared.get('font_input_profile')
+-        require(type(prepared_profile) is dict and prepared_profile.get('manifest') == scope['font_profile'] and
+-                prepared_profile.get('helper') == scope['font_profile_helper'] and
++        require(type(prepared_profile) is dict and report_reference_matches(prepared_profile.get('manifest'), scope['font_profile']) and
++                report_reference_matches(prepared_profile.get('helper'), scope['font_profile_helper']) and
+                 prepared_profile.get('profile_id') == profile['profile_id'] and
+                 prepared_profile.get('source_files_copied') == 0,
+                 'Prepared font profile provenance differs from current exact source pins')

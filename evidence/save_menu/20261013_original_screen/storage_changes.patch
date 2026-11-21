@@ -1,0 +1,167 @@
+--- Source/Host/InteractiveGameSession.h.before
++++ Source/Host/InteractiveGameSession.h.current
+@@ -4,6 +4,7 @@
+ #include "LocalTurnController.h"
+ #include "SdkGameSave.h"
+ #include "SdkGameRestore.h"
++#include "NativeSaveCatalog.h"
+ #include "SdkStateSnapshot.h"
+ #include "InteractiveUiSession.h"
+ #include "TradeRouteSmokeFixture.h"
+@@ -24,7 +25,7 @@
+     struct CapturedCityObservation final {int cityID,owner,isPuppet,isRazing,originalOwner;};
+     InteractiveGameSession(std::shared_ptr<HostState> host,std::wstring directory,std::wstring bundle)
+         :owner_(std::move(host)),host_(CheckedHost(owner_)),directory_(std::move(directory)),bundle_(std::move(bundle)){}
+-    ~InteractiveGameSession(){if(vm_ || local_ || game_ || map_ || team_ || receiver_ || saves_ || turns_ || ui_)std::terminate();}
++    ~InteractiveGameSession(){if(vm_ || local_ || game_ || map_ || team_ || receiver_ || saves_ || saveCatalog_ || turns_ || ui_ || core_)std::terminate();}
+     void Begin(ICvGameContext3& context,const std::wstring& checkpoint=L""){
+         Owner();if(game_ || vm_)throw std::logic_error("Interactive game already started");
+         std::unique_ptr<NativeSaveArchive> restored;
+@@ -53,6 +54,12 @@
+         }};
+         local_.reset(new LocalSdkSession(host_,*receiver_,*game_,context,std::move(profile)));
+         saves_.reset(new SdkGameSave(context,host_,directory_,bundle_));
++        core_=&context;saveCatalog_=std::make_shared<NativeSaveCatalog>(directory_);
++        const auto nativeAutoSave=host_.autoSave;
++        host_.autoSave=[this,nativeAutoSave](bool initial,bool postTurn){
++            nativeAutoSave(initial,postTurn);
++            saveCatalog_->ObserveWrittenSave(saves_->LastPath(),CaptureSaveMenuHeader());
++        };
+         turns_.reset(new LocalTurnController(host_,*game_));
+         game_->InitTacticalAnalysisMap(map_->NumPlots());
+         for(int id=0;id<MAX_PLAYERS;++id){
+@@ -103,7 +110,7 @@
+     void Stop(){
+         Owner();if(host_.scripts && !host_.scripts->IsQuiescent())throw std::logic_error("Interactive callbacks must finish before shutdown");
+         if(ui_){ui_->Stop();ui_.reset();}
+-        turns_.reset();saves_.reset();local_.reset();
++        turns_.reset();saves_.reset();saveCatalog_.reset();core_=nullptr;local_.reset();
+         if(vm_){host_.scripts->FreeLuaThread(vm_);vm_=nullptr;}
+         receiver_.reset();team_.reset();map_.reset();game_.reset();
+         std::puts("INTERACTIVE_GAME_SESSION_STOPPED=true");
+@@ -502,8 +509,39 @@
+         const auto archive=saves_->Capture(false,false);
+         const auto path=directory_+L"\\play-save-"+std::to_wstring(++saveCount_)+L"-turn-"+std::to_wstring(archive.turn)+L".zssave";
+         NativeSaveArchive::WriteAtomic(path,archive.Encode());
++        saveCatalog_->ObserveWrittenSave(path,CaptureSaveMenuHeader());
+         status_=L"\ud604\uc7ac \uac8c\uc784\uc744 \uc800\uc7a5\ud588\uc2b5\ub2c8\ub2e4.";
+         std::printf("INTERACTIVE_NATIVE_SAVE=%d|%s\n",archive.turn,Utf8(path).c_str());return path;
++    }
++    std::shared_ptr<const UiSaveMenuCatalog> CaptureSaveMenuCatalog(){
++        Owner();
++        if(!saveCatalog_ || !ui_ || ui_->ActiveKind()!=UiPopupKind::GameMenu || !ui_->HasModal() ||
++           !HumanTurn() || host_.autoSaveRunning || !host_.localCommands.IsQuiescent() ||
++           !host_.scripts || !host_.scripts->IsQuiescent() || HasMandatoryUiDecision())
++            throw std::logic_error("SaveMenu catalog requires its settled retained GameMenu owner");
++        auto snapshot=std::make_shared<UiSaveMenuCatalog>();
++        snapshot->current=CaptureSaveMenuHeader();snapshot->files=saveCatalog_->List();
++        // This callback is deliberately filesystem-only when invoked by the UI
++        // VM. A shared owner makes the immutable snapshot safe to retain.
++        const auto catalog=saveCatalog_;
++        snapshot->nameAvailable=[catalog](const std::string& name){return catalog->NameAvailable(name);};
++        return snapshot;
++    }
++    std::wstring SaveNamed(const std::string& name){
++        Owner();
++        if(!saveCatalog_ || !saves_ || !HumanTurn() || !host_.localCommands.IsQuiescent() || host_.autoSaveRunning ||
++           !host_.scripts || !host_.scripts->IsQuiescent() || host_.popupVisible ||
++           (ui_ && ui_->HasModal()) || HasMandatoryUiDecision())
++            throw std::logic_error("Named save requires the completed child and parent return boundary");
++        if(!saveCatalog_->NameAvailable(name)){
++            Reject(L"\uc774 \uc774\ub984\uc73c\ub85c\ub294 \ud604\uc7ac \uc138\uc158\uc5d0 \uc800\uc7a5\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.");return L"";
++        }
++        const auto archive=saves_->Capture(false,false);
++        const auto header=CaptureSaveMenuHeader();
++        const auto path=saveCatalog_->WriteNew(name,archive,header);
++        status_=L"\ud604\uc7ac \uac8c\uc784\uc744 \uc800\uc7a5\ud588\uc2b5\ub2c8\ub2e4.";
++        std::printf("INTERACTIVE_NATIVE_SAVE=%d|%s\nINTERACTIVE_SAVE_MENU_NAMED_SAVE=%d|%d|%s\n",
++            archive.turn,Utf8(path).c_str(),archive.activePlayer,archive.turn,Utf8(path).c_str());return path;
+     }
+     std::vector<int> ReadyUnits(){
+         Owner();std::vector<int> result;if(!HumanTurn())return result;
+@@ -586,8 +624,15 @@
+     bool DispatchUi(const ZeroSisPresentation::BitmapInputEvent& input){
+         Owner();if(!ui_ || !ui_->IsActive())return false;
+         const bool gameMenu=ui_->ActiveKind()==UiPopupKind::GameMenu;
++        const bool saveMenu=ui_->ActiveKind()==UiPopupKind::SaveMenu;
+         const bool consumed=ui_->Dispatch(input);
+-        if(gameMenu){
++        if(saveMenu){
++            // Stock OnSave publishes [Save,Close], then OnBack hides the child.
++            // Keep its requests before Update returns to the retained parent.
++            // Text edits, selection and Back must not advance the SDK game.
++            auto requests=ui_->TakeSaveMenuRequests();
++            ApplySaveMenuRequests(requests);Check();
++        }else if(gameMenu){
+             // OnQuickSave calls the original OnReturn before UI.QuickSave.
+             // Collect its request before Update releases the closed Lua VM,
+             // then save only at the existing nonmodal owner boundary.
+@@ -916,6 +961,23 @@
+         return result;
+     }
+ private:
++    UiSaveMenuHeader CaptureSaveMenuHeader(){
++        Owner();if(!core_ || !game_)throw std::logic_error("Save preview requires the live SDK owner");
++        const auto active=game_->GetActivePlayer();
++        std::unique_ptr<ICvPreGame1> pregame(core_->GetPreGame());
++        std::unique_ptr<ICvPlayer1> player(game_->GetPlayer(active));
++        if(!pregame || !player || player->GetID()!=active || !player->IsAlive() || !player->IsHuman() || game_->IsGameMultiPlayer())
++            throw std::logic_error("Save preview requires a real initialized local single-player identity");
++        const auto text=[](const CvString& value){return std::string(value.data(),value.size());};
++        UiSaveMenuHeader header;
++        header.playerCivilization=static_cast<int>(pregame->civilization(active));
++        header.gameSpeed=static_cast<int>(pregame->gameSpeed());header.startEra=static_cast<int>(pregame->era());
++        header.turnNumber=game_->GetElapsedGameTurns();header.difficulty=static_cast<int>(pregame->handicap(active));
++        header.worldSize=static_cast<int>(pregame->worldSize());header.currentEra=static_cast<int>(player->GetCurrentEra());
++        header.gameType=static_cast<int>(pregame->gameType());header.mapScript=text(pregame->mapScriptName());
++        header.leaderName=text(pregame->leaderName(active));header.civilizationName=text(pregame->civilizationDescription(active));
++        return header;
++    }
+     static HostState& CheckedHost(const std::shared_ptr<HostState>& host){
+         if(!host)throw std::invalid_argument("Interactive game owner is missing");return *host;
+     }
+@@ -1125,6 +1187,27 @@
+         game_->Update();Check();status_=success;
+         std::printf("INTERACTIVE_MISSION_ACCEPTED=%d|%d|%d|%d|%d\n",game_->GetGameTurn(),id,static_cast<int>(mission),x,y);return true;
+     }
++    void ApplySaveMenuRequests(const std::vector<SaveMenuRequest>& requests){
++        Owner();
++        if(!ui_ || !host_.scripts || !host_.scripts->IsQuiescent() || !host_.localCommands.IsQuiescent() || !HumanTurn())
++            throw std::logic_error("SaveMenu handoff requires its completed local owner callback");
++        if(requests.empty()){ui_->Update();return;}
++        const bool save=requests.size()==2 && requests[0].kind==SaveMenuRequest::Kind::Save &&
++            requests[1].kind==SaveMenuRequest::Kind::Close;
++        if(!save && !(requests.size()==1 && requests[0].kind==SaveMenuRequest::Kind::Close))
++            throw std::logic_error("SaveMenu callback order must be Save then Close, or Close only");
++        for(const auto& request:requests){
++            if(request.owner!=game_->GetActivePlayer() || request.turn!=game_->GetGameTurn() ||
++               (request.kind==SaveMenuRequest::Kind::Close && !request.name.empty()))
++                throw std::logic_error("SaveMenu command lost its active owner, turn or close identity");
++        }
++        ui_->Update();
++        if(save){
++            ui_->FinishSaveMenuForSave();
++            const auto path=SaveNamed(requests[0].name);
++            if(path.empty())std::printf("INTERACTIVE_SAVE_MENU_NAMED_SAVE_REJECTED=%d|%d\n",requests[0].owner,requests[0].turn);
++        }
++    }
+     void ApplyGameMenuRequests(const std::vector<GameMenuRequest>& requests){
+         Owner();if(requests.empty())return;
+         if(requests.size()!=1 || !host_.scripts || !host_.scripts->IsQuiescent() ||
+@@ -1140,6 +1223,8 @@
+         }
+         if(request.kind==GameMenuRequest::Kind::Open){
+             if(OpenGameMenu())return;
++        }else if(request.kind==GameMenuRequest::Kind::OpenSaveMenu){
++            ui_->OpenSaveMenu(CaptureSaveMenuCatalog());return;
+         }else if(request.kind==GameMenuRequest::Kind::QuickSave){
+             if(ui_ && !ui_->HasModal() && !HasMandatoryUiDecision() && !host_.popupVisible && !host_.autoSaveRunning){
+                 const auto path=Save();
+@@ -1155,6 +1240,7 @@
+             throw std::runtime_error("Interactive SDK left commands or scripts incomplete");
+     }
+     std::shared_ptr<HostState> owner_;HostState& host_;std::wstring directory_,bundle_,status_;
++    ICvGameContext3* core_=nullptr;std::shared_ptr<NativeSaveCatalog> saveCatalog_;
+     std::unique_ptr<InteractiveUiSession> ui_;
+     std::unique_ptr<ICvGame1> game_;std::unique_ptr<ICvMap1> map_;std::unique_ptr<ICvNetMessageHandler1> receiver_;
+     std::unique_ptr<ICvTeam1> team_;

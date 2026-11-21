@@ -1,0 +1,22 @@
+--- a/Source/Presentation/OriginalTerrainTessellationModel.h
++++ b/Source/Presentation/OriginalTerrainTessellationModel.h
+@@ -5,11 +5,17 @@
+ #include <stdexcept>
+ 
+ namespace ZeroSisPresentation { namespace OriginalTerrainTessellation {
+-// TerrainShader DS uses an externally supplied cb1[10..13] basis. No default
+-// basis is invented while the original CPU upload values remain unresolved.
++// TerrainShader DS uses the cb1[10..13] basis. RetailBasis() holds the values the
++// retail CPU writer (0x6add60) uploads; see evidence/world_terrain_original/
++// claude_geometry/basis_retail_probe.json. Callers still pass the basis explicitly.
+ using Basis=std::array<std::array<float,4>,4>;
+ using Heights=std::array<float,16>;
+ struct Sample {bool available=false;float height=0;};
++// Rows multiply t^3, t^2, t, 1; columns are controls 0..3 (Mitchell-Netravali B=3/4, C=0).
++inline Basis RetailBasis() noexcept {
++    return {{ {{-0.125f,0.875f,-0.875f,0.125f}},{{0.375f,-1.5f,1.125f,0.0f}},
++              {{-0.375f,0.0f,0.375f,0.0f}},{{0.125f,0.75f,0.125f,0.0f}} }};
++}
+ 
+ inline void ValidateBasis(const Basis& basis){
+     for(const auto& row:basis)for(const auto value:row)

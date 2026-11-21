@@ -1,0 +1,68 @@
+--- before/Source/Host/UiPopupContext.h
++++ after/Source/Host/UiPopupContext.h
+@@ -234,7 +234,20 @@
+             std::printf("UI_POPUP_CONTEXT_CLOSED=%u\n",sequence_);return;
+         }
+         stopping_=true;
+-        CloseInformationalPopup();
++        try{CloseInformationalPopup();}
++        catch(const std::exception& error){
++            Require();
++            if((kind_!=UiPopupKind::GameMenu && kind_!=UiPopupKind::SaveMenu) ||
++               timerRecoveryFailed_ || timerState_!=TimerState::Released || !scripts_.IsQuiescent())throw;
++            std::fprintf(stderr,"UI_POPUP_MENU_STOP_CLOSE_FAILURE=%s\n",error.what());
++            Fault();
++        }catch(...){
++            Require();
++            if((kind_!=UiPopupKind::GameMenu && kind_!=UiPopupKind::SaveMenu) ||
++               timerRecoveryFailed_ || timerState_!=TimerState::Released || !scripts_.IsQuiescent())throw;
++            std::fprintf(stderr,"UI_POPUP_MENU_STOP_CLOSE_FAILURE=unknown\n");
++            Fault();
++        }
+         if(kind_==UiPopupKind::GameMenu)RestoreGameMenuCursor();
+         if(kind_==UiPopupKind::EconomicOverview){
+             ApplyEconomicVisibility(false);
+@@ -443,6 +456,10 @@
+     void CloseInformationalPopup(){
+         Require();
+         if(!vm_)return;
++        if((kind_==UiPopupKind::GameMenu || kind_==UiPopupKind::SaveMenu) && !faulted_){
++            try{if(kind_==UiPopupKind::SaveMenu)RequireSaveMenuOwner();else RequireGameMenuOwner();}
++            catch(...){if(!faulted_)throw;}
++        }
+         if(kind_==UiPopupKind::SaveMenu){
+             if(!faulted_ && active_){DispatchInput(UiInputKind::KeyDown,VK_ESCAPE);TakeSaveMenuRequests();}
+             active_=false;saveMenuRequests_.clear();saveMenuReady_=false;return;
+@@ -1516,15 +1533,30 @@
+         if(!player || !player->IsAlive() || !player->IsHuman() || !player->IsTurnActive())
+             throw std::logic_error("GameMenu requires the living active human turn");
+     }
++    void RequireOwnedMenuPlayer(){
++        Require();
++        try{RequireLocalMenuPlayer(gameMenuOwner_,gameMenuTurn_);}
++        catch(const std::exception& error){
++            Require();
++            std::fprintf(stderr,"UI_POPUP_MENU_SCOPE_FAILURE=%s\n",error.what());
++            if(!dispatching_ && scripts_.IsQuiescent())Fault();
++            throw;
++        }catch(...){
++            Require();
++            std::fprintf(stderr,"UI_POPUP_MENU_SCOPE_FAILURE=unknown\n");
++            if(!dispatching_ && scripts_.IsQuiescent())Fault();
++            throw;
++        }
++    }
+     void RequireGameMenuOwner(){
+         if((kind_!=UiPopupKind::GameMenu && kind_!=UiPopupKind::SaveMenu) || !externalRouting_ || !pregame_ || faulted_)
+             throw std::logic_error("GameMenu query is outside its original owned context");
+-        RequireLocalMenuPlayer(gameMenuOwner_,gameMenuTurn_);
++        RequireOwnedMenuPlayer();
+     }
+     void RequireSaveMenuOwner(){
+         if(kind_!=UiPopupKind::SaveMenu || !externalRouting_ || !saveMenuCatalog_ || !saveMenuCatalog_->nameAvailable || faulted_)
+             throw std::logic_error("SaveMenu query is outside its immutable owned child context");
+-        RequireLocalMenuPlayer(gameMenuOwner_,gameMenuTurn_);
++        RequireOwnedMenuPlayer();
+     }
+     void QueueSaveMenuRequest(SaveMenuRequest::Kind kind,const char* name){
+         RequireSaveMenuOwner();

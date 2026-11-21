@@ -1,0 +1,301 @@
+// The runner inserts unchanged production method bodies. SDK player/lock state,
+// Lua callbacks, cursor restoration, snapshots and the deletion service are
+// explicit fixtures. No archive, game DLL, window or filesystem is used here.
+#include <Windows.h>
+#include <werapi.h>
+#include <algorithm>
+#include <cstdio>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+#include "UiLoadMenuContract.h"
+
+static unsigned checks=0,cases=0;
+static void Check(bool value,const char* reason){++checks;if(!value)throw std::runtime_error(reason);}
+template<class F> static void Throws(F&& function,const char* reason){
+    bool rejected=false;try{function();}catch(const std::exception&){rejected=true;}Check(rejected,reason);
+}
+template<class F> static void Case(const std::string& name,F&& function){
+    function();++cases;std::printf("DELETE_HANDOFF_CASE_PASS=%s\n",name.c_str());
+}
+
+namespace ZeroSisHost {
+static const int MAX_PLAYERS=64,GAME_SINGLE_PLAYER=0;
+enum PlayerTypes {FixturePlayer=1};
+enum class UiPopupKind {GameMenu,SaveMenu,LoadMenu,UnitPanel,TopPanel};
+enum class UiInputKind {LeftClick,RightClick,KeyDown,PointerMove,TextInput};
+struct UiInputRequest {UiInputKind kind=UiInputKind::PointerMove;std::uint64_t key=0;double delta=0.0;bool consumed=false;};
+struct UiInputDispatch {static int Dispatch(){return 1;}};
+struct LockFixture {bool held=true;bool HeldByCurrentThread()const{return held;}};
+struct ModsFixture {unsigned count=0;unsigned Size()const{return count;}};
+struct ScriptFixture {bool quiescent=true;bool IsQuiescent()const{return quiescent;}};
+struct HostFixture {
+    DWORD gameThread=GetCurrentThreadId();LockFixture gameLock;bool localSdkSessionBound=true,popupVisible=true;
+    std::shared_ptr<ModsFixture> activeMods=std::make_shared<ModsFixture>();unsigned gameplay=71;
+};
+struct ICvPlayer1 {
+    bool alive=true,human=true,turnActive=true;
+    bool IsAlive()const{return alive;}bool IsHuman()const{return human;}bool IsTurnActive()const{return turnActive;}
+};
+struct GameFixture {
+    int owner=1,turn=3;bool initialized=true,multiplayer=false,network=false;ICvPlayer1 player;unsigned timerDecrements=0;
+    bool IsFinalInitialized()const{return initialized;}bool IsGameMultiPlayer()const{return multiplayer;}
+    bool IsNetworkMultiPlayer()const{return network;}int GetActivePlayer()const{return owner;}int GetGameTurn()const{return turn;}
+    ICvPlayer1* GetPlayer(PlayerTypes){return new ICvPlayer1(player);}void EndTurnTimerSemaphoreDecrement(){++timerDecrements;}
+};
+struct SdkStateSnapshot {static unsigned Capture(const HostFixture& host){return host.gameplay;}};
+static unsigned SynchronousRandomSeed(){return 113;}
+static std::size_t Utf8Length(const char* text){return std::strlen(text);}
+struct DeleteServiceFixture {
+    unsigned calls=0,completed=0;bool reject=false;std::string lastPath;
+    void Delete(const UiSaveMenuFile& file){
+        ++calls;lastPath=file.fileName;
+        if(reject)throw std::runtime_error("Injected immutable-observation rejection from deletion service");
+        ++completed;
+    }
+};
+class PopupBoundaryFixture final {
+public:
+    enum class TimerState {Released,Held,TransitionUnknown};
+    HostFixture host_;ScriptFixture scripts_;DeleteServiceFixture service_;
+    UiPopupKind kind_;bool active_=true,faulted_=false,dispatching_=false,stopping_=false,externalRouting_=true;
+    bool saveMenuInput_=false,loadMenuInput_=false,saveMenuReady_=false,loadMenuReady_=false,gameMenuReady_=false;
+    bool luaActive_=true,confirmationOpen_=false,timerRecoveryFailed_=false,serviceSawTombstone_=false;
+    TimerState timerState_=TimerState::Released;
+    UiInputKind saveMenuInputKind_=UiInputKind::PointerMove,loadMenuInputKind_=UiInputKind::PointerMove;
+    int gameMenuOwner_=1,gameMenuTurn_=3,loadMenuCursorToken_=0;
+    unsigned revision_=0,escapes_=0,closeCallbacks_=0,cursorRestores_=0,snapshots_=0,takeSaveCalls_=0;
+    void* vm_=reinterpret_cast<void*>(static_cast<std::uintptr_t>(1));
+    std::unique_ptr<int> pregame_=std::unique_ptr<int>(new int(1));
+    std::unique_ptr<GameFixture> game_=std::unique_ptr<GameFixture>(new GameFixture);
+    PopupBoundaryFixture* economicOwner_=nullptr;
+    std::shared_ptr<const UiSaveMenuCatalog> saveMenuCatalog_;
+    std::shared_ptr<const UiLoadMenuCatalog> loadMenuCatalog_;
+    std::vector<std::string> deletedMenuFiles_;
+    std::vector<SaveMenuRequest> saveMenuRequests_;
+    std::vector<LoadMenuRequest> loadMenuRequests_;
+    std::vector<int> gameMenuRequests_;
+    std::function<void(PopupBoundaryFixture&)> insideCloseCallback_;
+    explicit PopupBoundaryFixture(UiPopupKind kind,bool supported=true,bool knownHeader=true):kind_(kind){
+        UiSaveMenuFile target;target.fileName="fixture-owned/chosen.zssave";target.modificationTime="fixture-time";
+        target.modificationTimeHigh=0x01DC0000;target.modificationTimeLow=0x10203040;
+        target.observedFileIdentity={{7,11,13}};target.observedChecksum[0]=17;
+        if(knownHeader){auto header=std::make_shared<UiSaveMenuHeader>();header->gameType=GAME_SINGLE_PLAYER;target.header=header;}
+        auto sibling=target;sibling.fileName="fixture-owned/sibling.zssave";
+        const auto callback=[this](const UiSaveMenuFile& file){
+            serviceSawTombstone_=IsDeletedMenuFile(file.fileName);service_.Delete(file);
+        };
+        if(kind==UiPopupKind::SaveMenu){
+            auto catalog=std::make_shared<UiSaveMenuCatalog>();catalog->files={target,sibling};
+            catalog->nameAvailable=[](const std::string&){return true;};if(supported)catalog->deleteFile=callback;saveMenuCatalog_=catalog;
+        }else{
+            auto catalog=std::make_shared<UiLoadMenuCatalog>();catalog->files={target,sibling};
+            catalog->profile=UiLoadMenuCatalog::Profile::OwnedCurrentExactBundleNoAdditionalContent;
+            catalog->canLoad=[](const std::string&){return true;};if(supported)catalog->deleteFile=callback;loadMenuCatalog_=catalog;
+        }
+    }
+    const std::vector<UiSaveMenuFile>& Files()const{return kind_==UiPopupKind::SaveMenu?saveMenuCatalog_->files:loadMenuCatalog_->files;}
+    const UiSaveMenuFile& Find(const char* path){return kind_==UiPopupKind::SaveMenu?FindSaveMenuFile(path):FindLoadMenuFile(path);}
+    void EnterDeleteCallback(){
+        dispatching_=true;scripts_.quiescent=false;
+        if(kind_==UiPopupKind::SaveMenu){saveMenuInput_=true;saveMenuInputKind_=UiInputKind::LeftClick;}
+        else{loadMenuInput_=true;loadMenuInputKind_=UiInputKind::LeftClick;}
+    }
+    void LeaveDeleteCallback(){dispatching_=false;scripts_.quiescent=true;saveMenuInput_=loadMenuInput_=false;}
+    void RestoreLoadMenuCursor()noexcept{if(loadMenuCursorToken_){++cursorRestores_;loadMenuCursorToken_=0;}}
+    void RestoreGameMenuCursor()noexcept{}
+    std::string WriteSnapshot(const char*){++snapshots_;return "no-filesystem-fixture";}
+    static int ObserveActive(){return 2;}
+    void Call(int(*function)(),void* output){
+        if(dispatching_)throw std::logic_error("Reentrant Lua boundary fixture");
+        dispatching_=true;scripts_.quiescent=false;
+        try{
+            if(function==&ObserveActive)*static_cast<bool*>(output)=luaActive_;
+            else if(function==&UiInputDispatch::Dispatch){
+                auto& request=*static_cast<UiInputRequest*>(output);
+                if(request.kind==UiInputKind::LeftClick && request.key==501){DeleteMenuFile(Files()[0].fileName.c_str());request.consumed=true;}
+                else if(request.kind==UiInputKind::KeyDown && request.key==VK_ESCAPE){
+                    ++escapes_;request.consumed=true;
+                    if(confirmationOpen_)confirmationOpen_=false;
+                    else{
+                        if(kind_==UiPopupKind::SaveMenu)QueueSaveMenuRequest(SaveMenuRequest::Kind::Close,nullptr);
+                        else QueueLoadMenuRequest(LoadMenuRequest::Kind::Close,nullptr);
+                        ++closeCallbacks_;if(insideCloseCallback_)insideCloseCallback_(*this);luaActive_=false;
+                    }
+                }else if(kind_==UiPopupKind::LoadMenu && request.kind==UiInputKind::LeftClick && request.key==502){
+                    loadMenuCursorToken_=1;QueueLoadMenuRequest(LoadMenuRequest::Kind::Load,Files()[0].fileName.c_str());
+                    QueueLoadMenuRequest(LoadMenuRequest::Kind::Close,nullptr);++closeCallbacks_;luaActive_=false;request.consumed=true;
+                }
+            }else throw std::logic_error("Unknown Lua callback fixture");
+            dispatching_=false;scripts_.quiescent=true;
+        }catch(...){dispatching_=false;scripts_.quiescent=true;throw;}
+    }
+    @@REQUIRE@@
+    @@LOCAL_OWNER@@
+    @@OWNED_OWNER@@
+    @@GAME_OWNER@@
+    @@SAVE_OWNER@@
+    @@LOAD_OWNER@@
+    @@IS_DELETED@@
+    @@FIND_SAVE@@
+    @@FIND_LOAD@@
+    @@SUPPORTED@@
+    @@CAN_DELETE@@
+    @@DELETE@@
+    @@CAN_LOAD@@
+    @@QUEUE_LOAD@@
+    @@QUEUE_SAVE@@
+    @@HAS_LOAD@@
+    @@TAKE_LOAD@@
+    @@TAKE_SAVE@@
+    @@FAULT@@
+    bool DispatchInput(UiInputKind kind,std::uint64_t key,double delta=0.0){
+        Require();if(!active_ || faulted_)return false;
+        UiInputRequest request;request.kind=kind;request.key=key;request.delta=delta;
+        @@DISPATCH_LOAD@@
+        @@DISPATCH_SAVE@@
+        throw std::logic_error("Popup kind is outside this menu boundary fixture");
+    }
+    @@CLOSE_MENU_PREFIX@@
+};
+}
+
+int main(){
+    SetErrorMode(32771);DWORD wer=0;
+    if(FAILED(WerSetFlags(32)) || FAILED(WerGetFlags(GetCurrentProcess(),&wer)) || GetErrorMode()!=32771 || wer!=32)return 2;
+    std::puts("FAULT_UI_SUPPRESSED ERROR_MODE=32771 WER_FLAGS=32");
+    std::puts("SDK_LUA_CURSOR_AND_DELETE_SERVICE_ARE_FIXTURES NO_FILESYSTEM_MUTATION=true");
+    try{
+        using namespace ZeroSisHost;
+        for(const auto kind:{UiPopupKind::SaveMenu,UiPopupKind::LoadMenu}){
+            const std::string menu=kind==UiPopupKind::SaveMenu?"save-":"load-";
+            Case(menu+"successful-input-deletes-once-and-tombstones-lookups",[&]{
+                PopupBoundaryFixture popup(kind);const auto path=popup.Files()[0].fileName,sibling=popup.Files()[1].fileName;
+                const auto original=popup.Files()[0];
+                Check(popup.MenuDeletionSupported() && popup.CanDeleteMenuFile(original),"Supported known file was not eligible");
+                Check(popup.DispatchInput(UiInputKind::LeftClick,501),"Settled original confirmation input was not consumed");
+                Check(popup.service_.calls==1 && popup.service_.completed==1 && popup.service_.lastPath==path,"Deletion service did not run exactly once with the listed file");
+                Check(popup.serviceSawTombstone_ && popup.IsDeletedMenuFile(path),"Deletion tombstone was not allocated before the service commit");
+                Throws([&]{popup.Find(path.c_str());},"Deleted file remained available through the immutable-list lookup");
+                Check(!popup.CanDeleteMenuFile(original),"A tombstoned file remained eligible");
+                Check(popup.Find(sibling.c_str()).fileName==sibling && popup.Files().size()==2,"Deletion mutated or lost the immutable sibling snapshot");
+                Check(popup.active_ && popup.timerState_==PopupBoundaryFixture::TimerState::Released && popup.host_.gameplay==71 &&
+                    popup.loadMenuCursorToken_==0 && popup.game_->timerDecrements==0,"Delete changed gameplay, timer, cursor or menu lifetime");
+                Check(popup.saveMenuRequests_.empty() && popup.loadMenuRequests_.empty() && !popup.saveMenuReady_ && !popup.loadMenuReady_,"Delete fabricated a save/load/close request");
+                Throws([&]{popup.DispatchInput(UiInputKind::LeftClick,501);},"A duplicate confirmation called the deletion service again");
+                Check(popup.service_.calls==1 && popup.service_.completed==1,"Duplicate confirmation reached the service");
+            });
+            Case(menu+"service-rejection-rolls-back-tombstone",[&]{
+                PopupBoundaryFixture popup(kind);const auto path=popup.Files()[0].fileName;popup.EnterDeleteCallback();popup.service_.reject=true;
+                Throws([&]{popup.DeleteMenuFile(path.c_str());},"Service rejection did not propagate");
+                Check(popup.service_.calls==1 && popup.service_.completed==0 && popup.serviceSawTombstone_,"Failing service counter or preallocated tombstone differs");
+                Check(!popup.IsDeletedMenuFile(path) && popup.deletedMenuFiles_.empty(),"Failed service retained its deletion tombstone");
+                Check(popup.Find(path.c_str()).fileName==path && popup.CanDeleteMenuFile(popup.Files()[0]),"Rejected service changed the immutable listing");
+                popup.service_.reject=false;popup.DeleteMenuFile(path.c_str());
+                Check(popup.service_.calls==2 && popup.service_.completed==1 && popup.IsDeletedMenuFile(path),"A failed attempt could not be retried exactly once");
+                popup.LeaveDeleteCallback();
+            });
+            for(const bool supported:{false,true}){
+                Case(menu+(supported?"unknown-header-rejected":"unsupported-service-rejected"),[&]{
+                    PopupBoundaryFixture popup(kind,supported,!supported);popup.EnterDeleteCallback();
+                    Check(!popup.CanDeleteMenuFile(popup.Files()[0]),"Unknown or unsupported entry was offered for deletion");
+                    Throws([&]{popup.DeleteMenuFile(popup.Files()[0].fileName.c_str());},"Unsupported or unknown entry reached deletion");
+                    Check(popup.service_.calls==0 && popup.deletedMenuFiles_.empty(),"Rejected capability changed service or tombstones");
+                });
+            }
+            const std::vector<std::pair<std::string,std::function<void(PopupBoundaryFixture&)>>> guards={
+                {"closed",[](PopupBoundaryFixture& p){p.active_=false;}},
+                {"not-dispatching",[](PopupBoundaryFixture& p){p.dispatching_=false;}},
+                {"stopping",[](PopupBoundaryFixture& p){p.stopping_=true;}},
+                {"save-ready",[](PopupBoundaryFixture& p){p.saveMenuReady_=true;}},
+                {"load-ready",[](PopupBoundaryFixture& p){p.loadMenuReady_=true;}},
+                {"no-input",[](PopupBoundaryFixture& p){p.saveMenuInput_=p.loadMenuInput_=false;}},
+                {"keydown",[](PopupBoundaryFixture& p){p.saveMenuInputKind_=p.loadMenuInputKind_=UiInputKind::KeyDown;}},
+                {"rightclick",[](PopupBoundaryFixture& p){p.saveMenuInputKind_=p.loadMenuInputKind_=UiInputKind::RightClick;}},
+                {"pointer",[](PopupBoundaryFixture& p){p.saveMenuInputKind_=p.loadMenuInputKind_=UiInputKind::PointerMove;}},
+                {"text-input",[](PopupBoundaryFixture& p){p.saveMenuInputKind_=p.loadMenuInputKind_=UiInputKind::TextInput;}},
+                {"timer-held",[](PopupBoundaryFixture& p){p.timerState_=PopupBoundaryFixture::TimerState::Held;}},
+                {"timer-uncertain",[](PopupBoundaryFixture& p){p.timerState_=PopupBoundaryFixture::TimerState::TransitionUnknown;}},
+                {"load-cursor",[](PopupBoundaryFixture& p){p.loadMenuCursorToken_=1;}},
+                {"invalid-cursor",[](PopupBoundaryFixture& p){p.loadMenuCursorToken_=-1;}},
+                {"pending-save",[](PopupBoundaryFixture& p){p.saveMenuRequests_.push_back({SaveMenuRequest::Kind::Save,1,3,"name"});}},
+                {"pending-save-close",[](PopupBoundaryFixture& p){p.saveMenuRequests_.push_back({SaveMenuRequest::Kind::Close,1,3,{}});}},
+                {"pending-load",[](PopupBoundaryFixture& p){p.loadMenuRequests_.push_back({LoadMenuRequest::Kind::Load,1,3,"path"});}},
+                {"pending-load-close",[](PopupBoundaryFixture& p){p.loadMenuRequests_.push_back({LoadMenuRequest::Kind::Close,1,3,{}});}},
+                {"faulted",[](PopupBoundaryFixture& p){p.faulted_=true;}},
+                {"wrong-owner",[](PopupBoundaryFixture& p){++p.game_->owner;}},
+                {"wrong-turn",[](PopupBoundaryFixture& p){++p.game_->turn;}},
+                {"nonhuman",[](PopupBoundaryFixture& p){p.game_->player.human=false;}},
+                {"dead",[](PopupBoundaryFixture& p){p.game_->player.alive=false;}},
+                {"inactive-turn",[](PopupBoundaryFixture& p){p.game_->player.turnActive=false;}},
+                {"multiplayer",[](PopupBoundaryFixture& p){p.game_->multiplayer=true;}},
+                {"network",[](PopupBoundaryFixture& p){p.game_->network=true;}},
+                {"not-initialized",[](PopupBoundaryFixture& p){p.game_->initialized=false;}},
+                {"unbound-sdk",[](PopupBoundaryFixture& p){p.host_.localSdkSessionBound=false;}},
+                {"external-routing",[](PopupBoundaryFixture& p){p.externalRouting_=false;}},
+                {"owner-lock",[](PopupBoundaryFixture& p){p.host_.gameLock.held=false;}},
+                {"wrong-thread",[](PopupBoundaryFixture& p){++p.host_.gameThread;}}
+            };
+            for(const auto& guard:guards){
+                Case(menu+guard.first,[&]{
+                    PopupBoundaryFixture popup(kind);popup.EnterDeleteCallback();guard.second(popup);
+                    const auto saved=popup.saveMenuRequests_.size(),loaded=popup.loadMenuRequests_.size();
+                    Throws([&]{popup.DeleteMenuFile(popup.Files()[0].fileName.c_str());},"Invalid delete boundary was accepted");
+                    Check(popup.service_.calls==0 && popup.service_.completed==0 && popup.deletedMenuFiles_.empty(),"Invalid boundary reached the service or changed tombstones");
+                    Check(popup.saveMenuRequests_.size()==saved && popup.loadMenuRequests_.size()==loaded,"Invalid delete boundary consumed pending save/load/close commands");
+                    Check(popup.host_.gameplay==71 && popup.game_->timerDecrements==0,"Rejected delete changed gameplay or timer state");
+                });
+            }
+            Case(menu+"outside-empty-and-null-list-lookup-rejected",[&]{
+                PopupBoundaryFixture popup(kind);popup.EnterDeleteCallback();
+                for(const char* bad:{"fixture-outside/not-listed.zssave","",static_cast<const char*>(nullptr)})
+                    Throws([&]{popup.DeleteMenuFile(bad);},"Unlisted delete path was accepted");
+                Check(popup.service_.calls==0 && popup.deletedMenuFiles_.empty(),"Unlisted path reached deletion service");
+            });
+        }
+        Case("load-profile-and-active-mods-must-remain-authoritative",[]{
+            PopupBoundaryFixture popup(UiPopupKind::LoadMenu);popup.EnterDeleteCallback();popup.host_.activeMods->count=1;
+            Throws([&]{popup.DeleteMenuFile(popup.Files()[0].fileName.c_str());},"Nonempty active-mod profile allowed deletion");
+            popup.host_.activeMods->count=0;auto changed=std::make_shared<UiLoadMenuCatalog>(*popup.loadMenuCatalog_);
+            changed->profile=UiLoadMenuCatalog::Profile::Unknown;popup.loadMenuCatalog_=changed;
+            Throws([&]{popup.DeleteMenuFile(popup.Files()[0].fileName.c_str());},"Unknown exact-bundle profile allowed deletion");
+            Check(popup.service_.calls==0 && popup.deletedMenuFiles_.empty(),"Invalid load profile reached deletion service");
+        });
+        Case("save-close-cancels-confirmation-before-original-onback",[]{
+            PopupBoundaryFixture popup(UiPopupKind::SaveMenu);popup.confirmationOpen_=true;popup.CloseInformationalPopup();
+            Check(popup.escapes_==2 && popup.closeCallbacks_==1 && !popup.confirmationOpen_ && !popup.active_,"Save close did not cancel then run original OnBack");
+            Check(popup.saveMenuRequests_.empty() && !popup.saveMenuReady_ && popup.service_.calls==0,"Save close retained commands or invoked deletion");
+            const auto escapes=popup.escapes_;popup.CloseInformationalPopup();
+            Check(popup.escapes_==escapes && popup.service_.calls==0,"Repeated Save close dispatched or deleted again");
+        });
+        Case("load-normal-close-preserves-committed-close-until-take",[]{
+            PopupBoundaryFixture popup(UiPopupKind::LoadMenu);popup.confirmationOpen_=true;unsigned rejectedInside=0;
+            popup.insideCloseCallback_=[&](PopupBoundaryFixture& child){
+                Throws([&]{child.TakeLoadMenuRequests();},"Take consumed a request inside the original callback");++rejectedInside;
+            };
+            popup.CloseInformationalPopup();
+            Check(rejectedInside==1 && popup.escapes_==2 && popup.closeCallbacks_==1 && !popup.active_ && popup.HasPendingLoadMenuRequests(),"Normal Load close lost its completed original Close");
+            popup.CloseInformationalPopup();Check(popup.HasPendingLoadMenuRequests() && popup.escapes_==2,"Repeated Load close erased or repeated the pending Close");
+            const auto requests=popup.TakeLoadMenuRequests();
+            Check(requests.size()==1 && requests[0].kind==LoadMenuRequest::Kind::Close && requests[0].owner==1 && requests[0].turn==3 && requests[0].fileName.empty(),"Load Take returned a fabricated or changed Close");
+            Check(!popup.HasPendingLoadMenuRequests() && popup.TakeLoadMenuRequests().empty() && popup.service_.calls==0,"Load Close was consumed twice or triggered deletion");
+        });
+        Case("load-normal-close-preserves-load-close-and-cursor-until-take",[]{
+            PopupBoundaryFixture popup(UiPopupKind::LoadMenu);Check(popup.DispatchInput(UiInputKind::LeftClick,502),"Load callback did not complete");
+            popup.CloseInformationalPopup();
+            Check(popup.HasPendingLoadMenuRequests() && popup.loadMenuCursorToken_==1 && popup.cursorRestores_==0,"Normal close discarded a committed Load+Close or its cursor token");
+            const auto requests=popup.TakeLoadMenuRequests();
+            Check(requests.size()==2 && requests[0].kind==LoadMenuRequest::Kind::Load && requests[1].kind==LoadMenuRequest::Kind::Close,"Normal close reordered Load+Close");
+            Check(!popup.HasPendingLoadMenuRequests() && popup.loadMenuCursorToken_==0 && popup.cursorRestores_==1 && popup.service_.calls==0,"Take failed to restore its cursor exactly once or invoked deletion");
+        });
+        std::printf("OWNED_SAVE_DELETE_HANDOFF_PASS cases=%u checks=%u GAMECORE_ACTUAL_LOADED=false HWND_CREATED=false FILESYSTEM_MUTATED=false\n",cases,checks);
+        return 0;
+    }catch(const std::exception& error){
+        std::fprintf(stderr,"OWNED_SAVE_DELETE_HANDOFF_FAIL cases=%u checks=%u reason=%s\n",cases,checks,error.what());return 1;
+    }
+}

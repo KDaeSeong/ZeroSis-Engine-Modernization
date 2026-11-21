@@ -1,0 +1,148 @@
+--- before_enum/Source/Host/UiScene.lua
++++ after_enum/Source/Host/UiScene.lua
+@@ -1828,9 +1828,12 @@
+ end
+ 
+ if hasRetainedSaveMenuUi then
++  GameTypes=native('saveMenuGameTypes')
++  assert(type(GameTypes)=='table' and GameTypes.GAME_TYPE_NONE==-1 and GameTypes.GAME_SINGLE_PLAYER==0 and
++    GameTypes.GAME_NETWORK_MULTIPLAYER==1 and GameTypes.GAME_HOTSEAT_MULTIPLAYER==2 and
++    GameTypes.GAME_EMAIL_MULTIPLAYER==3,'SaveMenu requires its actual SDK game type enum binding')
+   saveMenuCurrent=assert(native('saveMenuCurrent'),'SaveMenu requires its actual current SDK header')
+-  assert(type(saveMenuCurrent)=='table' and GameTypes and GameTypes.GAME_SINGLE_PLAYER==0 and
+-    GameTypes.GAME_NETWORK_MULTIPLAYER==1 and GameTypes.GAME_HOTSEAT_MULTIPLAYER==2 and
++  assert(type(saveMenuCurrent)=='table' and
+     saveMenuCurrent.GameType==GameTypes.GAME_SINGLE_PLAYER,'SaveMenu requires the supported SDK single-player session')
+   PreGame.GameStarted=function() return true end
+   PreGame.IsMultiplayerGame=function() return false end
+--- before_enum/Tests/save_menu_scene.py
++++ after_enum/Tests/save_menu_scene.py
+@@ -25,14 +25,13 @@
+ )
+ 
+ HARNESS = GAME_MENU_HARNESS[:GAME_MENU_HARNESS.index("local now,owner,turn=")] + r'''
+-local now,requests,timerChanges=0,{},0
++local now,requests,timerChanges,enumCalls=0,{},0,0
+ local current=data.current
+ local env=setmetatable({ZeroSisUiLayout=layout,GameInfo=info,
+  Game={Rand=function() return 0 end,GetActivePlayer=function() return 0 end,
+   GetGameTurn=function() return 1 end,GetElapsedGameTurns=function() return 1 end,
+   GetTimeString=function() return '4000 BC' end},
+  Players={[0]={GetCurrentEra=function() return current.CurrentEra end}},
+- GameTypes={GAME_SINGLE_PLAYER=0,GAME_NETWORK_MULTIPLAYER=1,GAME_HOTSEAT_MULTIPLAYER=2},
+  GameOptionTypes={GAMEOPTION_LOCK_MODS=data.lockMods},
+  InterfaceModeTypes={INTERFACEMODE_SELECTION=0}}, {__index=_G})
+ env._G=env
+@@ -64,6 +63,15 @@
+  if op=='civilization' then return current.PlayerCivilization end
+  if op=='playerColor' then return 0 end
+  if op=='timer' then timerChanges=timerChanges+1;error('SaveMenu must not own a timer') end
++ if op=='saveMenuGameTypes' then
++  check(select('#',...)==0,'Game type enum binding arity changed');enumCalls=enumCalls+1
++  if data.enumFixture=='missing' then return nil end
++  if data.enumFixture=='non_table' then return 7 end
++  local value=captured(data.gameTypes)
++  if data.enumFixture=='wrong_value' then value.GAME_TYPE_NONE=9 end
++  if data.enumFixture=='missing_field' then value.GAME_EMAIL_MULTIPLAYER=nil end
++  return value
++ end
+  if op=='saveMenuCurrent' then return captured(current) end
+  if op=='saveMenuFiles' then return {data.savePath,data.unknownPath} end
+  if op=='saveMenuHeader' then
+@@ -86,7 +94,10 @@
+  if op=='gameMenuMapPreview' then return nil end
+  error('Unexpected native operation '..op)
+ end
++check(env.GameTypes==nil,'Fixture prepopulated a frontend GameTypes global')
+ run(source.scene..'\n'..source.input,'retained-SaveMenu')
++check(enumCalls==1 and env.GameTypes.GAME_TYPE_NONE==data.gameTypes.GAME_TYPE_NONE and
++ env.GameTypes.GAME_EMAIL_MULTIPLAYER==data.gameTypes.GAME_EMAIL_MULTIPLAYER,'Actual enum binding was bypassed')
+ run(source.stock,'original-SaveMenu.lua')
+ local function snap() return env.ZeroSisUi.Snapshot() end
+ local function node(tree,id)
+@@ -185,12 +196,38 @@
+ check(json(opened)==openedJson and json(named)==namedJson and json(closed)==closedJson,'Captured snapshots mutated')
+ return json({status='PASS_ORIGINAL_SAVE_MENU_COMPONENT',checks=checks,
+  nativeGameVerified=false,archiveWrites=0,timerChanges=timerChanges,
++ enumBindingCalls=enumCalls,
+  openedSnapshotJson=openedJson,namedSnapshotJson=namedJson,closedSnapshotJson=closedJson,
+  longNameSnapshotJson=longNameJson,longHomeSnapshotJson=longHomeJson,literalNameSnapshotJson=literalNameJson})
+ '''
+ 
+ 
+-def verify_component(*, include_snapshot: bool = False) -> dict:
++def sdk_game_types() -> dict:
++    path = PROJECT / "Source/SDK_BNW_x64/CvGameCoreDLLUtil/include/CvEnums.h"
++    source = path.read_text(encoding="utf-8-sig")
++    declaration = re.search(r"enum\s+GameTypes\s*\{(.*?)\};", source, re.S)
++    if declaration is None:
++        raise ValueError("Actual SDK GameTypes declaration is missing")
++    body = re.sub(r"//[^\n]*", "", declaration.group(1))
++    values, last = {}, -1
++    for field in body.split(','):
++        if not field.strip():
++            continue
++        item = re.fullmatch(r"\s*(GAME_[A-Z_]+)(?:\s*=\s*(-?\d+))?\s*", field)
++        if item is None:
++            raise ValueError("Actual SDK GameTypes field cannot be parsed")
++        last = int(item.group(2)) if item.group(2) is not None else last + 1
++        values[item.group(1)] = last
++    if set(values) != {"GAME_TYPE_NONE", "GAME_SINGLE_PLAYER", "GAME_NETWORK_MULTIPLAYER",
++                       "GAME_HOTSEAT_MULTIPLAYER", "GAME_EMAIL_MULTIPLAYER"}:
++        raise ValueError("Actual SDK GameTypes field inventory changed")
++    return values
++
++
++def verify_component(*, include_snapshot: bool = False, enum_fixture: str = "exact") -> dict:
++    if enum_fixture not in ("exact", "missing", "non_table", "wrong_value", "missing_field", "unsupported_header"):
++        raise ValueError("Unknown native enum fixture")
++    game_types = sdk_game_types()
+     paths = {
+         "scene": PROJECT / "Source/Host/UiScene.lua",
+         "input": PROJECT / "Source/Presentation/UiPresentationInput.lua",
+@@ -223,7 +260,9 @@
+     current = dict(PlayerCivilization=civilization["ID"], GameSpeed=2, StartEra=0,
+                    TurnNumber=1, Difficulty=3, WorldSize=3,
+                    MapScript="Assets/Maps/Continents.lua", LeaderName="",
+-                   CivilizationName="", CurrentEra=0, GameType=0)
++                   CivilizationName="", CurrentEra=0, GameType=game_types["GAME_SINGLE_PLAYER"])
++    if enum_fixture == "unsupported_header":
++        current["GameType"] = game_types["GAME_NETWORK_MULTIPLAYER"]
+     tags = sorted(set(re.findall(r"TXT_KEY_[A-Za-z0-9_]+", "\n".join(source.values()) +
+                                  ET.tostring(original, encoding="unicode") + json.dumps(tables))))
+     locale = {}
+@@ -244,6 +283,7 @@
+                     styleDefaultsPolicy=styles["policy"])
+         tree["fontMetrics"] = production_font_metrics(tree, inline)
+         data = dict(tables=tables, locale=locale, current=current, lockMods=lock_mods,
++                    gameTypes=game_types, enumFixture=enum_fixture,
+                     savePath=r"C:\owned\session\기존 저장.zssave",
+                     unknownPath=r"C:\owned\session\old-autosave.zssave")
+         result = execute_lua(HARNESS.replace("@@SOURCES@@", lua_value(source))
+--- before_enum/Tests/test_save_menu.py
++++ after_enum/Tests/test_save_menu.py
+@@ -3,7 +3,7 @@
+ import unittest
+ import xml.etree.ElementTree as ET
+ 
+-from save_menu_scene import verify_component
++from save_menu_scene import sdk_game_types, verify_component
+ from prepare_ui_popup_assets import (
+     GAME, KINDS, LAYOUTS, SCRIPTS, SAVE_MENU_LUA, SAVE_MENU_XML,
+     UNIQUE_BONUSES_LUA, save_menu_control_tree,
+@@ -45,6 +45,15 @@
+         self.assertEqual(result["named_snapshot"]["saveMenu"]["name"], "검증 저장")
+         self.assertFalse(result["closed_snapshot"]["saveMenu"]["textInputEnabled"])
+ 
++    def test_missing_or_invalid_native_enum_binding_and_unsupported_session_fail_closed(self):
++        self.assertEqual(sdk_game_types(), dict(GAME_TYPE_NONE=-1, GAME_SINGLE_PLAYER=0,
++                          GAME_NETWORK_MULTIPLAYER=1, GAME_HOTSEAT_MULTIPLAYER=2, GAME_EMAIL_MULTIPLAYER=3))
++        for mode in ("missing", "non_table", "wrong_value", "missing_field", "unsupported_header"):
++            message = ("supported SDK single-player session" if mode == "unsupported_header"
++                       else "actual SDK game type enum binding")
++            with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, message):
++                verify_component(enum_fixture=mode)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

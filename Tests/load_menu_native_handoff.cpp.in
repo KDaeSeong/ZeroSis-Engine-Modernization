@@ -1,0 +1,605 @@
+// Production fragments are inserted byte-for-byte by the Python runner.
+// SDK, Lua callback commit, catalog filesystem, window and core factory are
+// explicit fixtures. No actual Host/GameCore/SDK module is linked or loaded.
+#include <Windows.h>
+#include <werapi.h>
+#include <algorithm>
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include <cstring>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
+#include "UiLoadMenuContract.h"
+
+static unsigned checks=0,cases=0;
+static std::vector<std::string> events;
+static void Check(bool condition,const char* message){++checks;if(!condition)throw std::runtime_error(message);}
+template<class F> static void Throws(F&& operation,const char* message){
+    bool failed=false;try{operation();}catch(const std::exception&){failed=true;}Check(failed,message);
+}
+template<class F> static void Case(const char* name,F&& operation){
+    operation();++cases;std::printf("HANDOFF_CASE_PASS=%s\n",name);
+}
+static std::size_t Event(const std::string& value,std::size_t from=0){
+    const auto found=std::find(events.begin()+static_cast<std::ptrdiff_t>(from),events.end(),value);
+    if(found==events.end())throw std::runtime_error("Missing lifecycle event: "+value);
+    return static_cast<std::size_t>(found-events.begin());
+}
+namespace ZeroSisPresentation {
+enum class BitmapInputKind {ControlClick,KeyDown,PointerMove};
+struct BitmapInputEvent {BitmapInputKind kind=BitmapInputKind::ControlClick;unsigned long long sceneGeneration=7,controlKey=9;};
+}
+namespace ZeroSisHost {
+struct NativeSaveArchive {
+    int identity=0,turn=3,elapsed=3,activePlayer=1;
+    std::vector<int> sections=std::vector<int>(133,0);
+    explicit NativeSaveArchive(int value=0):identity(value){}
+};
+struct LockFixture {bool held=true;bool HeldByCurrentThread() const{return held;}};
+struct ScriptFixture {
+    bool quiescent=true;bool IsQuiescent()const{return quiescent;}
+    const char* LastError()const{return "";}
+    bool Close(){events.push_back("ScriptClose");return true;}
+    void FreeLuaThread(void*){events.push_back("LuaThreadFreed");}
+};
+struct CommandFixture {bool quiescent=true;bool IsQuiescent()const{return quiescent;}};
+struct ModFixture {std::size_t count=0;std::size_t Size()const{return count;}};
+struct HostState {
+    DWORD gameThread=GetCurrentThreadId();LockFixture gameLock;
+    std::shared_ptr<ScriptFixture> scripts=std::make_shared<ScriptFixture>();
+    CommandFixture localCommands;std::shared_ptr<ModFixture> activeMods=std::make_shared<ModFixture>();
+    bool autoSaveRunning=false,popupVisible=true;
+    std::function<void()> addPopup,closeInformationalPopup;
+};
+struct LocalGameCommands {
+    static void RequireOwnerLock(bool thread,bool lock){if(!thread || !lock)throw std::logic_error("owner fixture");}
+};
+struct ICvGameContext3 {};
+struct GameFixture {int owner=1,turn=3,updates=0,timerDecrements=0;int GetActivePlayer()const{return owner;}int GetGameTurn()const{return turn;}void Update(){++updates;}void EndTurnTimerSemaphoreDecrement(){++timerDecrements;}};
+static std::vector<unsigned char> fixtureManifest{0x41,0x42,0x43};
+class ReadFileHandle {
+public:
+    explicit ReadFileHandle(const std::wstring&){events.push_back("ManifestFixtureRead");}
+    DWORD Read(void* output,DWORD capacity){
+        const auto count=std::min<std::size_t>(fixtureManifest.size(),capacity);std::memcpy(output,fixtureManifest.data(),count);return static_cast<DWORD>(count);
+    }
+};
+static std::string Utf8(const std::wstring& text){
+    if(text.empty())return {};
+    const int count=WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,text.data(),static_cast<int>(text.size()),nullptr,0,nullptr,nullptr);
+    if(count<=0)throw std::runtime_error("UTF-8 fixture failed");std::string result(static_cast<std::size_t>(count),'\0');
+    if(WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,text.data(),static_cast<int>(text.size()),&result[0],count,nullptr,nullptr)!=count)
+        throw std::runtime_error("UTF-8 fixture conversion failed");return result;
+}
+enum class UiPopupKind {GameMenu,SaveMenu,LoadMenu,EconomicOverview,UnitPanel,TopPanel};
+struct GameMenuRequest {int unused=0;};
+struct PopupFixture {bool active=true;bool IsActive()const{return active;}void Stop(){active=false;}};
+class UiFixture {
+public:
+    explicit UiFixture(HostState& host):host_(host),popup_(new PopupFixture){}
+    HostState& host_;std::unique_ptr<PopupFixture> popup_,suspendedGameMenu_;
+    std::vector<int> pending_;UiPopupKind kind_=UiPopupKind::GameMenu;
+    std::vector<LoadMenuRequest> nextRequests,committed;
+    unsigned updates=0,finishes=0;bool mandatory=false;
+    @@UI_REQUIRE@@
+    bool HasModal()const{return (popup_ && popup_->active) || !!suspendedGameMenu_;}
+    bool IsActive()const{return popup_ && popup_->active;}
+    UiPopupKind ActiveKind()const{return kind_;}
+    bool HasCaptureDecision()const{return mandatory;}bool HasLeaderDecision()const{return false;}
+    bool Dispatch(const ZeroSisPresentation::BitmapInputEvent&){
+        events.push_back("CallbackComplete");committed=std::move(nextRequests);
+        if(!committed.empty())popup_->active=false;return true;
+    }
+    std::vector<LoadMenuRequest> TakeLoadMenuRequests(){auto value=std::move(committed);committed.clear();return value;}
+    std::vector<SaveMenuRequest> TakeSaveMenuRequests(){return {};}
+    std::vector<GameMenuRequest> TakeGameMenuRequests(){return {};}
+    bool Update(){
+        ++updates;events.push_back("UiUpdate");
+        if(kind_==UiPopupKind::LoadMenu && !popup_->active){
+            popup_=std::move(suspendedGameMenu_);kind_=UiPopupKind::GameMenu;host_.popupVisible=true;
+        }else if(kind_==UiPopupKind::GameMenu && popup_ && !popup_->active)popup_.reset();
+        return true;
+    }
+    void CloseCurrent(){++finishes;events.push_back("ParentClose");popup_->active=false;host_.popupVisible=false;}
+    @@FINISH@@
+    void BeginLoad(){suspendedGameMenu_=std::move(popup_);popup_.reset(new PopupFixture);kind_=UiPopupKind::LoadMenu;host_.popupVisible=true;}
+};
+
+// This second fixture narrows only the SDK/Lua/cursor boundary. The methods
+// responsible for the LoadMenu request lifetime and router close are actual
+// production fragments, rather than the simplified UiFixture above.
+enum class UiInputKind {PointerMove,KeyDown,LeftClick,RightClick,TextInput};
+struct UiInputRequest {UiInputKind kind=UiInputKind::PointerMove;std::uint64_t key=0;double delta=0;bool consumed=false;};
+struct UiInputDispatch {static int Dispatch(){return 3;}};
+struct SdkStateSnapshot {static int Capture(const HostState&){return 0;}};
+static unsigned SynchronousRandomSeed(){return 0;}
+static const int GAME_SINGLE_PLAYER=0;
+class LoadPopupBoundaryFixture {
+public:
+    enum class TimerState {Released,Held,TransitionUnknown};
+    HostState& host_;ScriptFixture& scripts_;
+    UiPopupKind kind_=UiPopupKind::LoadMenu;
+    bool active_=false,faulted_=false,dispatching_=false,stopping_=false;
+    bool externalRouting_=true,timerRecoveryFailed_=false;
+    bool loadMenuInput_=false,loadMenuReady_=false,gameMenuReady_=false,saveMenuReady_=false,saveMenuInput_=false;
+    bool luaActive_=false,pullDownOpen=false,failAfterQueued=false;
+    void* vm_=reinterpret_cast<void*>(static_cast<std::uintptr_t>(1));
+    void* core_=reinterpret_cast<void*>(static_cast<std::uintptr_t>(1));
+    std::unique_ptr<int> pregame_=std::unique_ptr<int>(new int(1));
+    std::unique_ptr<GameFixture> game_=std::unique_ptr<GameFixture>(new GameFixture);
+    LoadPopupBoundaryFixture* economicOwner_=nullptr;
+    std::vector<std::unique_ptr<LoadPopupBoundaryFixture>> economicChildren_;
+    std::shared_ptr<const UiLoadMenuCatalog> loadMenuCatalog_;
+    std::vector<LoadMenuRequest> loadMenuRequests_;
+    std::vector<int> gameMenuRequests_,saveMenuRequests_;
+    int gameMenuOwner_=1,gameMenuTurn_=3,loadMenuCursorToken_=0;
+    unsigned sequence_=0,revision_=0,escapes=0,queuedClose=0,completedCallbacks=0,cursorRestores=0;
+    std::string shownSnapshot_;
+    TimerState timerState_=TimerState::Released;
+    UiInputKind loadMenuInputKind_=UiInputKind::PointerMove;
+    std::function<void(LoadPopupBoundaryFixture&)> insideCloseCallback;
+    explicit LoadPopupBoundaryFixture(HostState& host,UiPopupKind kind=UiPopupKind::LoadMenu):host_(host),scripts_(*host.scripts),kind_(kind){
+        auto catalog=std::make_shared<UiLoadMenuCatalog>();
+        catalog->profile=UiLoadMenuCatalog::Profile::OwnedCurrentExactBundleNoAdditionalContent;
+        UiSaveMenuFile file;file.fileName="C:\\fixture-owned\\one.zssave";
+        auto header=std::make_shared<UiSaveMenuHeader>();header->gameType=GAME_SINGLE_PLAYER;file.header=header;
+        catalog->files.push_back(file);catalog->canLoad=[](const std::string&){return true;};loadMenuCatalog_=catalog;
+        if(kind_==UiPopupKind::GameMenu)active_=luaActive_=true;
+    }
+    @@POPUP_REQUIRE@@
+    void RequireLocalMenuPlayer(int owner,int turn){
+        Require();if(!game_ || owner!=game_->owner || turn!=game_->turn)throw std::logic_error("SDK player/turn fixture mismatch");
+    }
+    @@POPUP_OWNED_PLAYER@@
+    @@POPUP_LOAD_OWNER@@
+    @@POPUP_FIND_LOAD@@
+    @@POPUP_CAN_LOAD@@
+    @@POPUP_QUEUE_LOAD@@
+    void RequireSaveMenuOwner(){throw std::logic_error("Unexpected SaveMenu fixture branch");}
+    void RequireGameMenuOwner(){Require();if(kind_!=UiPopupKind::GameMenu)throw std::logic_error("Unexpected parent fixture kind");}
+    void RestoreLoadMenuCursor()noexcept{if(loadMenuCursorToken_){++cursorRestores;loadMenuCursorToken_=0;}}
+    void RestoreGameMenuCursor()noexcept{}
+    void ReleaseWarResources(){}
+    void ApplyEconomicVisibility(bool){throw std::logic_error("Unexpected economic fixture branch");}
+    bool IsActive()const{return active_;}
+    static int OpenLoadMenuLua(){return 1;}
+    static int ObserveActive(){return 2;}
+    std::string WriteSnapshot(const char*){return "fixture-snapshot-no-files";}
+    void Call(int(*function)(),void* output){
+        if(dispatching_)throw std::logic_error("Reentrant callback fixture");
+        dispatching_=true;scripts_.quiescent=false;
+        try{
+            if(function==&OpenLoadMenuLua)luaActive_=true;
+            else if(function==&ObserveActive)*static_cast<bool*>(output)=luaActive_;
+            else if(function==&UiInputDispatch::Dispatch){
+                auto& input=*static_cast<UiInputRequest*>(output);
+                if(input.kind==UiInputKind::LeftClick && input.key==101){pullDownOpen=true;input.consumed=true;}
+                else if(input.kind==UiInputKind::KeyDown && input.key==VK_ESCAPE){
+                    ++escapes;input.consumed=true;
+                    if(pullDownOpen)pullDownOpen=false;
+                    else{
+                        QueueLoadMenuRequest(LoadMenuRequest::Kind::Close,nullptr);++queuedClose;
+                        if(insideCloseCallback)insideCloseCallback(*this);
+                        if(failAfterQueued)throw std::runtime_error("Injected original callback fixture failure");
+                        luaActive_=false;
+                    }
+                }else if(input.kind==UiInputKind::LeftClick && input.key==202){
+                    loadMenuCursorToken_=1;
+                    QueueLoadMenuRequest(LoadMenuRequest::Kind::Load,loadMenuCatalog_->files[0].fileName.c_str());
+                    QueueLoadMenuRequest(LoadMenuRequest::Kind::Close,nullptr);++queuedClose;luaActive_=false;input.consumed=true;
+                }
+            }else throw std::logic_error("Unknown callback fixture function");
+            dispatching_=false;scripts_.quiescent=true;++completedCallbacks;
+        }catch(...){dispatching_=false;scripts_.quiescent=true;Fault();throw;}
+    }
+    @@POPUP_OPEN_LOAD@@
+    @@POPUP_HAS_LOAD@@
+    @@POPUP_TAKE_LOAD@@
+    bool DispatchInput(UiInputKind kind,std::uint64_t key,double delta=0.0){
+        Require();if(!active_ || faulted_)return false;
+        UiInputRequest request;request.kind=kind;request.key=key;request.delta=delta;
+        @@POPUP_DISPATCH_LOAD@@
+        // The original parent GameMenu Lua is outside this regression fixture.
+        if(kind_==UiPopupKind::GameMenu)return false;
+        throw std::logic_error("Unexpected popup input fixture kind");
+    }
+    @@POPUP_CLOSE_LOAD_PREFIX@@
+    @@POPUP_STOP@@
+    @@POPUP_FAULT@@
+};
+class RouterPopupBoundaryFixture:public LoadPopupBoundaryFixture {
+public:
+    std::function<void(const std::vector<LoadMenuRequest>&)> observedTake;
+    explicit RouterPopupBoundaryFixture(HostState& host,UiPopupKind kind):LoadPopupBoundaryFixture(host,kind){}
+    void CloseInformationalPopup(){
+        if(kind_==UiPopupKind::LoadMenu)LoadPopupBoundaryFixture::CloseInformationalPopup();
+        else{events.push_back("FixtureParentClose");active_=luaActive_=false;host_.popupVisible=false;}
+    }
+    std::vector<LoadMenuRequest> TakeLoadMenuRequests(){
+        auto value=LoadPopupBoundaryFixture::TakeLoadMenuRequests();if(observedTake)observedTake(value);return value;
+    }
+};
+class WindowCloseUiBoundaryFixture {
+public:
+    HostState& host_;
+    std::unique_ptr<RouterPopupBoundaryFixture> popup_,suspendedGameMenu_,suspendedCity_,suspendedEconomic_;
+    UiPopupKind kind_=UiPopupKind::LoadMenu;
+    std::vector<int> pending_,leaderWarStates_;
+    bool closePending_=false;
+    int opened_=0,gameMenuOpened_=0;
+    unsigned observedCloseCount=0,observedTakeCalls=0,discardCalls=0,observedEscapes=0,observedQueuedClose=0;
+    bool takeAfterCallback=false;
+    explicit WindowCloseUiBoundaryFixture(HostState& host):host_(host),
+        popup_(new RouterPopupBoundaryFixture(host,UiPopupKind::LoadMenu)),
+        suspendedGameMenu_(new RouterPopupBoundaryFixture(host,UiPopupKind::GameMenu)){
+        popup_->OpenLoadMenu();
+        popup_->observedTake=[this](const std::vector<LoadMenuRequest>& requests){
+            ++observedTakeCalls;
+            observedEscapes=popup_->escapes;observedQueuedClose=popup_->queuedClose;
+            takeAfterCallback=!popup_->dispatching_ && !popup_->loadMenuInput_ && host_.scripts->IsQuiescent();
+            if(requests.size()==1 && requests[0].kind==LoadMenuRequest::Kind::Close && requests[0].fileName.empty())++observedCloseCount;
+        };
+    }
+    @@WINDOW_CLOSE_REQUIRE@@
+    bool HasCaptureDecision()const{return false;}bool HasLeaderDecision()const{return false;}
+    bool HasEconomicContext()const{return false;}bool EconomicScopeMatches()const{return true;}
+    void StopEconomicContexts(){throw std::logic_error("Unexpected economic close fixture");}
+    void DiscardIdleProduction(){++discardCalls;}
+    bool Update(){
+        Require();bool changed=false;
+        @@WINDOW_CLOSE_RETURN@@
+        if(popup_ && kind_==UiPopupKind::GameMenu && !popup_->IsActive()){
+            // Other router context teardown is an explicit boundary fixture.
+            popup_->Stop();popup_.reset();host_.popupVisible=false;changed=true;
+        }
+        return changed;
+    }
+    @@WINDOW_CLOSE_CURRENT@@
+    @@WINDOW_CLOSE_ALL@@
+};
+struct NativeSaveCatalog {
+    std::vector<UiSaveMenuFile> listed;std::shared_ptr<const NativeSaveArchive> current=std::make_shared<const NativeSaveArchive>(42);
+    bool fail=false;unsigned reads=0;
+    std::vector<UiSaveMenuFile> List()const{return listed;}
+    std::shared_ptr<const NativeSaveArchive> ReadLoadArchive(const std::string& path,const UiSaveMenuFile& original,const std::vector<unsigned char>& bytes){
+        ++reads;events.push_back("SealArchive");
+        if(fail || bytes!=fixtureManifest || listed.size()!=1 || path!=original.fileName ||
+           original.observedFileIdentity!=listed[0].observedFileIdentity ||
+           original.observedChecksum!=listed[0].observedChecksum || !original.header)
+            throw std::runtime_error("Catalog fixture rejected changed observed identity");
+        return current;
+    }
+};
+static unsigned pathRestores=0,archiveRestores=0;
+static const NativeSaveArchive* restoredAddress=nullptr;
+struct SdkGameRestore {
+    static void LoadArchive(ICvGameContext3&,HostState&,const NativeSaveArchive& archive,const std::wstring&){
+        ++archiveRestores;restoredAddress=&archive;events.push_back("RestoreArchiveBoundary");
+    }
+    static NativeSaveArchive Load(ICvGameContext3&,HostState&,const std::wstring&,const std::wstring&){
+        ++pathRestores;events.push_back("RestorePathBoundary");return NativeSaveArchive(77);
+    }
+};
+class InteractiveGameSession {
+public:
+    @@DTO@@
+    std::shared_ptr<HostState> owner_;HostState& host_;std::wstring bundle_;
+    std::shared_ptr<NativeSaveCatalog> saveCatalog_=std::make_shared<NativeSaveCatalog>();
+    std::unique_ptr<UiFixture> ui_;std::unique_ptr<GameFixture> game_=std::unique_ptr<GameFixture>(new GameFixture);
+    std::shared_ptr<const UiLoadMenuCatalog> loadMenuCatalog_;std::vector<unsigned char> loadMenuBundleManifest_;
+    LoadHandoff pendingLoad_;bool human=true;void* vm_=nullptr;std::shared_ptr<const NativeSaveArchive> usedRestored_;
+    explicit InteractiveGameSession(std::shared_ptr<HostState> host,std::wstring=L"",std::wstring bundle=L"owned")
+        :owner_(std::move(host)),host_(*owner_),bundle_(std::move(bundle)),ui_(new UiFixture(host_)){
+        UiSaveMenuFile row;row.fileName=u8"C:\\owned\\저장.zssave";
+        row.header=std::make_shared<const UiSaveMenuHeader>();row.observedFileIdentity={{1,2,3}};row.observedChecksum[0]=0x71;
+        saveCatalog_->listed.push_back(row);
+    }
+    @@OWNER@@
+    bool HumanTurn()const{return human;}
+    bool HasMandatoryUiDecision(){Owner();return ui_ && (ui_->HasCaptureDecision() || ui_->HasLeaderDecision());}
+    @@CAPTURE@@
+    @@HAS_PENDING@@
+    @@TAKE@@
+    @@APPLY@@
+    @@PATH@@
+    @@CHECK@@
+    void ApplySaveMenuRequests(const std::vector<SaveMenuRequest>&){throw std::logic_error("Unexpected SaveMenu fixture branch");}
+    void ApplyGameMenuRequests(const std::vector<GameMenuRequest>&){throw std::logic_error("Unexpected GameMenu fixture branch");}
+    @@DISPATCH@@
+    @@BEGIN_PREFIX@@
+    void Stop(){events.push_back("LiveStop");}
+    void Ready(){loadMenuCatalog_=CaptureLoadMenuCatalog();ui_->BeginLoad();}
+    std::vector<LoadMenuRequest> LoadPair()const{
+        return {{LoadMenuRequest::Kind::Load,1,3,saveCatalog_->listed[0].fileName},{LoadMenuRequest::Kind::Close,1,3,{}}};
+    }
+};
+static_assert(std::is_same<decltype(InteractiveGameSession::LoadHandoff{}.archive),std::shared_ptr<const NativeSaveArchive>>::value,
+              "The actual production handoff must expose only a const archive");
+
+static bool coreAlive=false,shutdownFailure=false;
+static unsigned factories=0,loopCalls=0,ticks=0;
+static std::deque<InteractiveGameSession::LoadHandoff> loopResults;
+static std::vector<const NativeSaveArchive*> routedArchives;
+class SessionFixture {
+public:
+    template<class F> void WithCore(F&& fn){ICvGameContext3 context;fn(context);}
+    void Shutdown(){events.push_back("CoreShutdown");if(shutdownFailure)throw std::runtime_error("Fixture shutdown pending");coreAlive=false;}
+};
+struct DeferredFixture {void Clear(){events.push_back("EditorClear");}};
+struct WindowFixture {
+    ~WindowFixture(){events.push_back("WindowDestroyed");}
+    void* NativeHandle()const{return reinterpret_cast<void*>(1);}
+    bool EnableTextInput(bool,std::wstring*){events.push_back("TextInputDisabled");return true;}
+};
+static InteractiveGameSession::LoadHandoff RunInteractiveGameLoop(SessionFixture& session,HostState&,InteractiveGameSession& live,
+    const std::wstring&,bool smoke,const std::wstring&,const std::wstring&,bool,std::shared_ptr<const NativeSaveArchive> decodedArchive){
+    events.push_back("LoopEnter");++loopCalls;if(decodedArchive)routedArchives.push_back(decodedArchive.get());
+    WindowFixture window;DeferredFixture deferredEditorInput;std::wstring error;
+    InteractiveGameSession::LoadHandoff loadHandoff;
+    if(loopResults.empty())throw std::runtime_error("Fixture loop sequence exhausted");
+    loadHandoff=std::move(loopResults.front());loopResults.pop_front();
+    // In the no-result fixture, exercise the actual production dispatch bridge
+    // only when a test has supplied an original callback request.
+    if(!loadHandoff.archive && live.ui_->kind_==UiPopupKind::LoadMenu){
+        std::vector<ZeroSisPresentation::BitmapInputEvent> inputs(1);bool acted=false;
+        session.WithCore([&](ICvGameContext3&){
+            for(const auto& input:inputs){@@LOOP_DISPATCH@@}
+            @@LOOP_GATE@@
+            ++ticks;
+        });
+        (void)acted;
+    }
+    @@LOOP_EXIT@@
+    return {};
+}
+struct BundleFixture {std::wstring Directory()const{return L"owned";}std::wstring UnitAssetsPath()const{return L"fixture";}bool UnitAnimation()const{return false;}};
+struct HeapFixture {void Close(){events.push_back("HeapClose");}};
+struct DatabaseFixture {};
+static bool MockSetCurrentDirectoryW(const wchar_t*){events.push_back("DirectoryRestore");return true;}
+namespace Localization {static bool Shutdown(){events.push_back("LocaleShutdown");return true;}}
+#define SetCurrentDirectoryW MockSetCurrentDirectoryW
+class HostRun {
+public:
+    explicit HostRun(const std::wstring&){++factories;events.push_back("CreateHost");state_=std::make_shared<HostState>();}
+    ~HostRun(){events.push_back("DestroyHost");}
+    std::shared_ptr<HostState> state_;std::unique_ptr<PopupFixture> popup_;
+    std::unique_ptr<InteractiveGameSession> interactive_;SessionFixture session_;BundleFixture bundle_;
+    std::wstring sessionDirectory_=L"fixture-session",oldDirectory_=L"fixture-old";
+    HeapFixture tempHeap_;DatabaseFixture rules_,localization_;
+    bool dataTouched_=false,localizationTouched_=false,directoryChanged_=false;
+    void Prepare(const std::string&){events.push_back("PrepareHost");dataTouched_=localizationTouched_=directoryChanged_=true;}
+    void InitializeCore(){if(coreAlive)throw std::logic_error("New core created before old shutdown");coreAlive=true;events.push_back("InitializeCore");}
+    const std::wstring& SessionDirectory()const{return sessionDirectory_;}
+    std::string DataObservation()const{return "FIXTURE_DATA_ONLY NO_GAMECORE";}
+    void TraceNewGameServices(){events.push_back("TraceOwnerServices");}
+    static void CloseDatabase(DatabaseFixture&){events.push_back("DatabaseClose");}
+    @@HOST_PLAY@@
+    @@HOST_SHUTDOWN@@
+};
+#undef SetCurrentDirectoryW
+static std::wstring ExecutableDirectory(){return L"fixture-owned-bundle";}
+}
+static void RequireGameCoreAbsent(){if(ZeroSisHost::coreAlive)throw std::logic_error("Old fixture core remains active");events.push_back("RequireAbsent");}
+static int PlayBlock(std::unique_ptr<ZeroSisHost::HostRun>& run,bool playSmoke=false){
+    bool play=true;const std::wstring playCheckpoint;
+    const wchar_t* argv[]={L"fixture",L"--play",L"en_US"};
+    @@MAIN_PLAY@@
+    throw std::logic_error("Actual play block did not return");
+}
+static std::shared_ptr<ZeroSisHost::HostState> Host(){return std::make_shared<ZeroSisHost::HostState>();}
+static void ResetLifecycle(){
+    using namespace ZeroSisHost;events.clear();factories=loopCalls=ticks=0;coreAlive=shutdownFailure=false;
+    loopResults.clear();routedArchives.clear();
+}
+
+int main(){
+    SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX|SEM_NOOPENFILEERRORBOX);
+    DWORD wer=0;
+    if(FAILED(WerSetFlags(WER_FAULT_REPORTING_NO_UI)) || FAILED(WerGetFlags(GetCurrentProcess(),&wer)) ||
+       GetErrorMode()!=32771 || wer!=32)return 2;
+    std::puts("FAULT_UI_SUPPRESSED ERROR_MODE=32771 WER_FLAGS=32");
+    std::puts("SDK_UI_WINDOW_AND_FACTORY_DEPENDENCIES_ARE_FIXTURES GAMECORE_ACTUAL_LOADED=false HWND_CREATED=false");
+    try{
+        using namespace ZeroSisHost;
+        Case("actual-router-window-close-preserves-one-original-close",[]{
+            for(unsigned open=0;open<2;++open){
+                events.clear();auto host=Host();WindowCloseUiBoundaryFixture ui(*host);
+                if(open)Check(ui.popup_->DispatchInput(UiInputKind::LeftClick,101),"PullDown fixture did not open");
+                Check(ui.popup_->pullDownOpen==(open!=0),"PullDown callback fixture state mismatch");
+                ui.CloseAll();
+                Check(!ui.popup_ && !ui.suspendedGameMenu_ && !host->popupVisible,"normal window close retained a modal owner");
+                Check(ui.observedTakeCalls==1 && ui.observedCloseCount==1,"window close did not consume exactly one original Close");
+                Check(ui.observedEscapes==1+open && ui.observedQueuedClose==1,"Escape collapsed/closed more than the original scopes");
+                Check(ui.takeAfterCallback && ui.discardCalls==1,"router Take ran during a callback or failed final cleanup");
+                Check(std::count(events.begin(),events.end(),"LuaThreadFreed")==2,"window close did not release child then parent exactly once");
+            }
+        });
+        Case("normal-close-keeps-committed-request-until-take",[]{
+            auto host=Host();LoadPopupBoundaryFixture popup(*host);popup.OpenLoadMenu();
+            popup.DispatchInput(UiInputKind::LeftClick,101);
+            unsigned callbackTakeRejections=0;
+            popup.insideCloseCallback=[&](LoadPopupBoundaryFixture& child){
+                Throws([&]{child.TakeLoadMenuRequests();},"Take consumed a request inside its original callback");++callbackTakeRejections;
+            };
+            popup.CloseInformationalPopup();
+            Check(callbackTakeRejections==1 && !popup.active_ && popup.HasPendingLoadMenuRequests(),"normal close lost its completed request");
+            Check(popup.escapes==2 && popup.queuedClose==1 && popup.loadMenuReady_,"two Escape steps did not publish one Close");
+            const auto callbacks=popup.completedCallbacks;popup.CloseInformationalPopup();
+            Check(popup.completedCallbacks==callbacks && popup.HasPendingLoadMenuRequests(),"repeated close erased or repeated a committed callback");
+            const auto requests=popup.TakeLoadMenuRequests();
+            Check(requests.size()==1 && requests[0].kind==LoadMenuRequest::Kind::Close && requests[0].owner==1 && requests[0].turn==3 && requests[0].fileName.empty(),"Take returned an invalid original Close");
+            Check(!popup.HasPendingLoadMenuRequests() && popup.TakeLoadMenuRequests().empty(),"Close was consumed more than once");
+            popup.Stop();
+        });
+        Case("normal-close-preserves-already-committed-load-close-and-cursor",[]{
+            auto host=Host();LoadPopupBoundaryFixture popup(*host);popup.OpenLoadMenu();
+            Check(popup.DispatchInput(UiInputKind::LeftClick,202),"load callback fixture did not commit");
+            popup.CloseInformationalPopup();
+            Check(popup.HasPendingLoadMenuRequests() && popup.loadMenuCursorToken_==1 && popup.cursorRestores==0,"normal close discarded committed load/cursor ownership");
+            const auto requests=popup.TakeLoadMenuRequests();
+            Check(requests.size()==2 && requests[0].kind==LoadMenuRequest::Kind::Load && requests[1].kind==LoadMenuRequest::Kind::Close,"normal close reordered a completed load callback");
+            Check(!popup.HasPendingLoadMenuRequests() && popup.loadMenuCursorToken_==0 && popup.cursorRestores==1,"verified Take failed to release cursor exactly once");
+            popup.Stop();
+        });
+        Case("actual-stop-discards-active-and-committed-child-requests",[]{
+            for(unsigned committed=0;committed<2;++committed){
+                events.clear();auto host=Host();LoadPopupBoundaryFixture popup(*host);popup.OpenLoadMenu();
+                popup.DispatchInput(UiInputKind::LeftClick,committed?202:101);
+                popup.Stop();
+                Check(popup.stopping_ && !popup.vm_ && !popup.core_ && !popup.game_ && !popup.pregame_,"Stop did not release the child VM boundary");
+                Check(popup.loadMenuRequests_.empty() && !popup.loadMenuReady_ && !popup.loadMenuInput_ && popup.loadMenuCursorToken_==0,"Stop exposed a discarded request or busy cursor");
+                Check(popup.queuedClose==1 && popup.escapes==(committed?0u:2u),"Stop invented or duplicated a load/back callback");
+                Check(std::count(events.begin(),events.end(),"LuaThreadFreed")==1,"Stop released a child more than once");
+                popup.Stop();Check(std::count(events.begin(),events.end(),"LuaThreadFreed")==1,"second Stop repeated VM release");
+            }
+        });
+        Case("actual-fault-discards-request-from-failed-close-callback",[]{
+            events.clear();auto host=Host();LoadPopupBoundaryFixture popup(*host);popup.OpenLoadMenu();popup.failAfterQueued=true;
+            Throws([&]{popup.CloseInformationalPopup();},"failed Lua callback fixture became a normal close");
+            Check(popup.faulted_ && !popup.active_ && !host->popupVisible,"Fault retained a visible failed callback");
+            Check(popup.queuedClose==1 && popup.loadMenuRequests_.empty() && !popup.loadMenuReady_ && !popup.loadMenuInput_ && !popup.dispatching_,"Fault leaked an uncommitted Close");
+            Check(host->scripts->IsQuiescent() && popup.timerState_==LoadPopupBoundaryFixture::TimerState::Released,"Fault left callback/timer ownership unsettled");
+            Throws([&]{popup.TakeLoadMenuRequests();},"faulted callback was handed to the session");
+            popup.Stop();Check(!popup.vm_ && std::count(events.begin(),events.end(),"LuaThreadFreed")==1,"faulted child was not released exactly once");
+        });
+        Case("actual-fault-discards-committed-load-and-restores-cursor-once",[]{
+            auto host=Host();LoadPopupBoundaryFixture popup(*host);popup.OpenLoadMenu();popup.DispatchInput(UiInputKind::LeftClick,202);
+            popup.Fault();
+            Check(popup.loadMenuRequests_.empty() && !popup.loadMenuReady_ && !popup.loadMenuInput_ && popup.loadMenuCursorToken_==0 && popup.cursorRestores==1,"Fault did not discard committed load/cursor ownership");
+            popup.Fault();Check(popup.cursorRestores==1 && popup.game_->timerDecrements==0,"repeat Fault restored cursor/timer twice");
+            popup.Stop();Check(popup.cursorRestores==1 && !popup.vm_,"faulted Stop repeated cursor release");
+        });
+        Case("window-close-rejects-an-already-committed-load-command",[]{
+            auto host=Host();WindowCloseUiBoundaryFixture ui(*host);ui.popup_->DispatchInput(UiInputKind::LeftClick,202);
+            Throws([&]{ui.CloseAll();},"window close silently discarded a pending load as normal Close");
+            Check(ui.popup_ && ui.suspendedGameMenu_ && ui.observedCloseCount==0,"rejected window close released the retained parent");
+            ui.popup_->Stop();ui.popup_.reset();ui.suspendedGameMenu_->Stop();ui.suspendedGameMenu_.reset();
+        });
+        Case("current-catalog-profile-and-immutable-list",[]{
+            InteractiveGameSession live(Host());const auto snapshot=live.CaptureLoadMenuCatalog();
+            Check(snapshot->profile==UiLoadMenuCatalog::Profile::OwnedCurrentExactBundleNoAdditionalContent,"missing verified fixture profile");
+            Check(snapshot->canLoad(snapshot->files[0].fileName),"known exact archive rejected");
+            Check(!snapshot->canLoad("C:\\outside.zssave"),"unknown path accepted");
+            live.saveCatalog_->listed[0].observedFileIdentity[2]++;
+            Check(!snapshot->canLoad(snapshot->files[0].fileName),"listed identity was silently refreshed");
+        });
+        Case("nonempty-active-mod-profile-rejected",[]{
+            InteractiveGameSession live(Host());live.host_.activeMods->count=1;
+            Throws([&]{live.CaptureLoadMenuCatalog();},"inferred an empty mod profile");
+        });
+        Case("load-close-seals-after-callback-before-parent-release",[]{
+            events.clear();InteractiveGameSession live(Host());live.Ready();
+            const auto expected=live.saveCatalog_->current;live.ui_->nextRequests=live.LoadPair();
+            Check(live.DispatchUi({}),"production Load dispatch rejected");
+            Check(Event("CallbackComplete")<Event("SealArchive",Event("CallbackComplete")),"sealed before callback returned");
+            Check(Event("SealArchive",Event("CallbackComplete"))<Event("ParentClose"),"released parent before immutable seal");
+            Check(live.game_->updates==0 && live.ui_->finishes==1,"load advanced SDK or missed original parent close");
+            auto handoff=live.TakePendingLoad();
+            Check(handoff.archive.get()==expected.get() && handoff.fileName.find(L'\uc800')!=std::wstring::npos,"immutable identity/UTF-8 source changed");
+            live.saveCatalog_->current=std::make_shared<const NativeSaveArchive>(99);
+            Check(handoff.archive->identity==42,"post-handoff catalog change replaced the selected archive");
+            Check(!live.TakePendingLoad().archive && !live.loadMenuCatalog_,"handoff was consumed more than once");
+        });
+        Case("close-only-returns-parent-without-load",[]{
+            InteractiveGameSession live(Host());live.Ready();live.ui_->nextRequests={{LoadMenuRequest::Kind::Close,1,3,{}}};
+            live.DispatchUi({});Check(!live.HasPendingLoad() && live.ui_->HasModal() && live.ui_->finishes==0,"Back destroyed parent or created load");
+        });
+        Case("callback-order-owner-turn-and-close-identity",[]{
+            const auto invalid=[](unsigned kind){
+                InteractiveGameSession live(Host());live.Ready();auto requests=live.LoadPair();
+                if(kind==0)std::reverse(requests.begin(),requests.end());
+                if(kind==1)requests.resize(1);
+                if(kind==2)requests.push_back(requests.back());
+                if(kind==3)requests[0].owner=2;
+                if(kind==4)requests[0].turn=4;
+                if(kind==5)requests[1].fileName="bad-close";
+                live.ui_->nextRequests=requests;
+                Throws([&]{live.DispatchUi({});},"invalid callback transaction accepted");
+                Check(!live.HasPendingLoad() && live.ui_->finishes==0,"bad request released original parent");
+            };
+            for(unsigned kind=0;kind<6;++kind)invalid(kind);
+        });
+        Case("changed-file-and-missing-preview-fail-before-teardown",[]{
+            for(unsigned kind=0;kind<4;++kind){
+                InteractiveGameSession live(Host());live.Ready();auto requests=live.LoadPair();
+                if(kind==0)live.saveCatalog_->fail=true;
+                if(kind==1)requests[0].fileName="C:\\unknown.zssave";
+                if(kind==2){auto replacement=std::make_shared<UiLoadMenuCatalog>(*live.loadMenuCatalog_);replacement->files[0].header.reset();live.loadMenuCatalog_=replacement;}
+                if(kind==3){auto replacement=std::make_shared<UiLoadMenuCatalog>(*live.loadMenuCatalog_);replacement->profile=UiLoadMenuCatalog::Profile::Unknown;live.loadMenuCatalog_=replacement;}
+                live.ui_->nextRequests=requests;
+                Throws([&]{live.DispatchUi({});},"unverified archive request accepted");
+                Check(!live.HasPendingLoad() && live.ui_->finishes==0,"failed seal tore down original parent");
+            }
+        });
+        Case("owner-lock-quiescence-human-and-autosave-guards",[]{
+            for(unsigned kind=0;kind<7;++kind){
+                InteractiveGameSession live(Host());live.Ready();live.ui_->nextRequests=live.LoadPair();
+                if(kind==0)live.host_.gameThread=GetCurrentThreadId()+1;
+                if(kind==1)live.host_.gameLock.held=false;
+                if(kind==2)live.host_.scripts->quiescent=false;
+                if(kind==3)live.host_.localCommands.quiescent=false;
+                if(kind==4)live.human=false;
+                if(kind==5)live.host_.autoSaveRunning=true;
+                if(kind==6)live.ui_->mandatory=true;
+                Throws([&]{live.DispatchUi({});},"unsettled owner request accepted");
+                Check(!live.pendingLoad_.archive && live.ui_->finishes==0,"unsettled request released parent");
+            }
+        });
+        Case("pending-load-take-rechecks-world-exit",[]{
+            InteractiveGameSession live(Host());live.Ready();live.ui_->nextRequests=live.LoadPair();live.DispatchUi({});
+            const auto original=live.pendingLoad_.archive;
+            live.host_.popupVisible=true;
+            Throws([&]{live.TakePendingLoad();},"visible parent escaped through handoff");
+            Check(live.pendingLoad_.archive==original,"rejected Take consumed immutable data");
+            live.host_.popupVisible=false;Check(live.TakePendingLoad().archive==original,"settled Take changed archive");
+        });
+        Case("archive-routing-never-reopens-selected-path",[]{
+            pathRestores=archiveRestores=0;restoredAddress=nullptr;
+            InteractiveGameSession live(Host());live.game_.reset();ICvGameContext3 context;
+            auto archive=std::make_shared<const NativeSaveArchive>(42);live.Begin(context,L"diagnostic-only-removed-path",archive);
+            Check(archiveRestores==1 && pathRestores==0 && restoredAddress==archive.get() && live.usedRestored_==archive,"decoded archive was copied/reopened");
+            InteractiveGameSession pathLive(Host());pathLive.game_.reset();pathLive.Begin(context,L"CLI-checkpoint");
+            Check(pathRestores==1 && pathLive.usedRestored_->identity==77,"existing CLI path restore changed");
+        });
+        Case("actual-loop-dispatch-barrier-prevents-extra-tick",[]{
+            ResetLifecycle();auto host=Host();InteractiveGameSession live(host);live.Ready();live.ui_->nextRequests=live.LoadPair();
+            loopResults.push_back({});SessionFixture session;
+            auto value=RunInteractiveGameLoop(session,*host,live,L"",false,L"",L"",false,{});
+            Check(value.archive && ticks==0 && live.game_->updates==0,"load fell through into Tick/game Update");
+            Check(Event("EditorClear")<Event("WindowDestroyed"),"window outlived the loop return boundary");
+        });
+        Case("fresh-host-order-and-same-archive-across-two-loads",[]{
+            ResetLifecycle();auto first=std::make_shared<const NativeSaveArchive>(101),second=std::make_shared<const NativeSaveArchive>(202);
+            loopResults.push_back({first,L"first-diagnostic"});loopResults.push_back({second,L"second-diagnostic"});loopResults.push_back({});
+            std::unique_ptr<HostRun> run(new HostRun(ExecutableDirectory()));run->Prepare("en_US");run->InitializeCore();
+            Check(PlayBlock(run)==0,"actual HostMain play block failed");
+            Check(factories==3 && loopCalls==3 && routedArchives.size()==2 && routedArchives[0]==first.get() && routedArchives[1]==second.get(),"fresh factory or immutable archive sequence changed");
+            auto at=Event("WindowDestroyed");at=Event("LiveStop",at);at=Event("CoreShutdown",at);at=Event("RequireAbsent",at);
+            at=Event("DestroyHost",at);at=Event("CreateHost",at);at=Event("PrepareHost",at);at=Event("InitializeCore",at);
+            Check(at<Event("LoopEnter",at),"new loop ran before fresh initialization");
+            Check(!coreAlive && !run->state_,"normal transition retained old core state");run.reset();
+        });
+        Case("cleanup-failure-prevents-new-host-creation",[]{
+            ResetLifecycle();loopResults.push_back({std::make_shared<const NativeSaveArchive>(88),L"diagnostic"});
+            std::unique_ptr<HostRun> run(new HostRun(ExecutableDirectory()));run->Prepare("en_US");run->InitializeCore();shutdownFailure=true;
+            Throws([&]{PlayBlock(run);},"failed old shutdown still loaded another session");
+            Check(factories==1 && run && coreAlive,"old cleanup failure discarded its owner or created a second core");
+            shutdownFailure=false;run->Shutdown();RequireGameCoreAbsent();run.reset();
+        });
+        Case("existing-smoke-cannot-bypass-its-finite-sequence",[]{
+            ResetLifecycle();loopResults.push_back({std::make_shared<const NativeSaveArchive>(88),L"diagnostic"});
+            std::unique_ptr<HostRun> run(new HostRun(ExecutableDirectory()));run->Prepare("en_US");run->InitializeCore();
+            Throws([&]{PlayBlock(run,true);},"unexpected LoadMenu input bypassed existing smoke assertions");
+            Check(factories==1,"smoke rejection created a second host");run->Shutdown();RequireGameCoreAbsent();run.reset();
+        });
+        std::printf("EXTRACTED_LOAD_HANDOFF_PASS cases=%u checks=%u GAMECORE_ACTUAL_LOADED=false HWND_CREATED=false\n",cases,checks);
+        return 0;
+    }catch(const std::exception& error){std::fprintf(stderr,"EXTRACTED_LOAD_HANDOFF_FAILURE: %s\n",error.what());return 1;}
+}

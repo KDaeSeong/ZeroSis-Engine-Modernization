@@ -1,0 +1,19 @@
+#pragma once
+// Shared SDK declarations. Keep the legacy STL ABI flags in both build recipes.
+#define NOMINMAX
+#include <windows.h>
+#include <algorithm>
+#include <cassert>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <limits>
+#include <new>
+#include <string>
+#include <vector>
+#include <FireWorks/FDefNew.h>
+#include <FireWorks/FFireTypes.h>
+#include <FireWorks/FAssert.h>
+#include <FireWorks/FMemoryStream.h>
