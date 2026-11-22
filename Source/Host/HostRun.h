@@ -11,10 +11,14 @@
 #include "HostTempHeap.h"
 #include "SdkGameRestore.h"
 #include "SdkStateSnapshot.h"
+#if !defined(ZEROSIS_HEADLESS_TURN_HOST)
 #include "UiPopupContext.h"
 #include "InteractiveGameLoop.h"
 #include "TradeRouteFixtureProbe.h"
 #include "MenuLifecycleWindow.h"
+#else
+#include "TurnBenchmarkGoldenAge.h"
+#endif
 #if defined(ZEROSIS_UI_WINDOW_PRESENTATION)
 #include "MenuReplayPresentation.h"
 #endif
@@ -112,6 +116,10 @@ public:
     void InitializeCore() {
         if(!state_)throw std::logic_error("Host data must be prepared before GameCore");
         session_.Initialize(module_,state_,rules_);
+#if defined(ZEROSIS_HEADLESS_TURN_HOST)
+        if(TurnBenchmarkObservation::Enabled() && state_->scripts->HasFile(TurnBenchmarkGoldenAge::Script()))
+            session_.WithCore([&](ICvGameContext3& context){goldenAge_.reset(new TurnBenchmarkGoldenAge(*state_,context));});
+#endif
     }
 #if defined(ZEROSIS_UI_WINDOW_PRESENTATION)
     void StartCapturedSetup(const MenuLifecycleSetup& setup){
@@ -359,12 +367,14 @@ public:
         return RunMenuLifecycleFrontEnd(!!setup,endGame,rankings,hooks);
     }
 #endif
+#if !defined(ZEROSIS_HEADLESS_TURN_HOST)
     void EnableUiPopups(bool windowPresentation=false,bool displayResize=false,bool refreshClosed=false){
         if(popup_)throw std::logic_error("UI popup context is already enabled");
         session_.WithCore([&](ICvGameContext3& context){
             popup_.reset(new UiPopupContext(state_,context,sessionDirectory_,windowPresentation,displayResize,refreshClosed));
         });
     }
+#endif
     std::string CoreObservation() {
         if(session_.Phase()!=SessionPhase::CoreInitialized)throw std::logic_error("Core must be initialized before runtime observation");
         coreProbe_.Begin(*state_);
@@ -391,6 +401,7 @@ public:
         catch(...){TraceNewGameServices();throw;}
         TraceNewGameServices();return firstTurnProbe_.Observation();
     }
+#if !defined(ZEROSIS_HEADLESS_TURN_HOST)
     void TradeRouteFixtureObservation(){
         if(popup_ || interactive_)throw std::logic_error("Trade fixture probe must not share an interactive UI context");
         try{session_.WithCore([&](ICvGameContext3& context){
@@ -398,6 +409,7 @@ public:
         });}catch(...){TraceNewGameServices();throw;}
         TraceNewGameServices();
     }
+#endif
 #if defined(ZEROSIS_UI_WINDOW_PRESENTATION)
     InteractiveGameSession::LoadHandoff InteractivePlay(bool smoke,const std::wstring& checkpoint=L"",
                                                         std::shared_ptr<const NativeSaveArchive> decodedArchive={}){
@@ -432,6 +444,7 @@ public:
         });}catch(...){TraceNewGameServices();throw;}
         TraceNewGameServices();return result;
     }
+#if !defined(ZEROSIS_HEADLESS_TURN_HOST)
     void RestoreFoundCityCheckpoint(const std::wstring& path,const std::string& expected,FoundCityResult founded,CityDecisionResult* decisions=nullptr,bool productionUi=false,bool productionWindow=false,bool liveProduction=false,bool researchUi=false,bool researchWindow=false,bool researchTree=false){
         if(researchWindow && !researchUi)throw std::logic_error("Research window requires the official TechPopup");
         if(researchTree && (!researchUi || researchWindow))throw std::logic_error("Research-tree probe requires its separate direct-input mode");
@@ -573,10 +586,15 @@ public:
         });}catch(...){TraceNewGameServices();throw;}
         TraceNewGameServices();
     }
+#endif
     void RestoreCheckpoint(const std::wstring& path,const std::string& expected,unsigned extraTurns=0,bool fixturePromotions=false,bool fixtureUnitActions=false){
         if(extraTurns>98)throw std::invalid_argument("Extended probe allows at most 98 additional turns");
+#if defined(ZEROSIS_HEADLESS_TURN_HOST)
+        if(fixturePromotions)throw std::invalid_argument("Official promotion input requires a popup-capable Host");
+#else
         if(fixturePromotions && (!extraTurns || !popup_))
             throw std::invalid_argument("Fixture promotions require extended turns and the UI candidate");
+#endif
         if(fixtureUnitActions && !fixturePromotions)
             throw std::invalid_argument("SDK unit action inputs require the fixture promotion profile");
         try{session_.WithCore([&](ICvGameContext3& context){
@@ -682,10 +700,17 @@ public:
     void Shutdown() {
         if(state_ && state_->scripts && !state_->scripts->IsQuiescent())
             throw std::logic_error("Cannot shut down the host during a script callback");
+#if !defined(ZEROSIS_HEADLESS_TURN_HOST)
         if(popup_){
             session_.WithCore([&](ICvGameContext3&){popup_->Stop();});
             popup_.reset();
         }
+#else
+        if(goldenAge_){
+            session_.WithCore([&](ICvGameContext3&){goldenAge_->Stop();});
+            goldenAge_.reset();
+        }
+#endif
 #if defined(ZEROSIS_UI_WINDOW_PRESENTATION)
         if(interactive_){session_.WithCore([&](ICvGameContext3&){interactive_->Stop();});interactive_.reset();}
 #endif
@@ -806,7 +831,11 @@ private:
     Database::Connection rules_,localization_;
     WindowsModule module_;
     std::shared_ptr<HostState> state_;
+#if !defined(ZEROSIS_HEADLESS_TURN_HOST)
     std::unique_ptr<UiPopupContext> popup_;
+#else
+    std::unique_ptr<TurnBenchmarkGoldenAge> goldenAge_;
+#endif
 #if defined(ZEROSIS_UI_WINDOW_PRESENTATION)
     std::unique_ptr<InteractiveGameSession> interactive_;
 #endif

@@ -1,6 +1,7 @@
 #pragma once
 #include "OriginalTerrainModel.h"
 #include "OriginalTerrainBinding.h"
+#include "OriginalTerrainPatchPlacement.h"
 #include "WorldViewRenderer.h"
 #include <algorithm>
 #include <array>
@@ -8,9 +9,42 @@
 #include <vector>
 
 namespace ZeroSisPresentation { namespace OriginalTerrain {
-constexpr float RowSpacing=0.866025404f;
 inline void GeometryRequire(bool value,const char* message){if(!value)throw std::invalid_argument(message);}
-inline int WrappedCoordinate(int value,int span){const int r=value%span;return r<0?r+span:r;}
+inline PatchWorld::Frame PatchFrameForCamera(const Atlas& atlas,int cameraColumn,int cameraRow){
+    Detail::AtlasShape(atlas);
+    GeometryRequire(cameraColumn>=0 && cameraRow>=0 &&
+        static_cast<unsigned>(cameraColumn)<atlas.width/TexelsPerHex &&
+        static_cast<unsigned>(cameraRow)<atlas.height/TexelsPerHex,"Invalid terrain patch camera plot");
+    const auto cube=OffsetToCube(cameraColumn,cameraRow);
+    const auto source=CubeToSourceTexel({static_cast<double>(cube.x),static_cast<double>(cube.y),static_cast<double>(cube.z)});
+    // The current mesh has 64 intervals and a shared terminal vertex per
+    // chunk; the atlas stores only the owned texels. Height sampling applies
+    // its own boundary/visibility policy to that terminal vertex.
+    const unsigned samplesX=atlas.width+1,samplesY=atlas.height+1;
+    return {samplesX,samplesY,
+        PatchWorld::NativeWorld(source.x-atlas.originX,samplesX,OriginalTerrainCacheSampling::SourceMetricXDefault),
+        PatchWorld::NativeWorld(source.y-atlas.originY,samplesY,OriginalTerrainCacheSampling::SourceMetricYDefault)};
+}
+inline int WrappedCoordinate(int value,int span){
+    if(value>=0 && value<span)return value;
+    const int r=value%span;return r<0?r+span:r;
+}
+inline bool HasPatchControls(const Atlas& atlas,unsigned column,unsigned row){
+    Detail::AtlasShape(atlas);
+    const unsigned side=PatchWorld::CellIntervals;
+    GeometryRequire(atlas.width%side==0 && atlas.height%side==0 &&
+        column<atlas.width/side && row<atlas.height/side,"Invalid patch control cell");
+    const unsigned x=column*side,y=row*side;
+    const bool wrapsLastColumn=x+side==atlas.width,wrapsLastRow=y+side==atlas.height;
+    if((wrapsLastColumn&&!atlas.wrapX)||(wrapsLastRow&&!atlas.wrapY))return false;
+    for(unsigned i=0;i<=side;++i){
+        const auto iy=y+i==atlas.height?0:y+i;
+        const auto start=atlas.known.begin()+static_cast<std::size_t>(iy)*atlas.width;
+        const auto first=start+x,end=first+(wrapsLastColumn?side:side+1);
+        if(!std::all_of(first,end,[](std::uint8_t k){return k==1;}) || (wrapsLastColumn && *start!=1))return false;
+    }
+    return true;
+}
 inline std::array<int,2> WorldTile(double x,double z,int width,int height,bool wrapX,bool wrapY){
     GeometryRequire(width>0 && height>0 && std::isfinite(x) && std::isfinite(z) &&
         std::abs(x)<1000000 && std::abs(z)<1000000,"Invalid original terrain world coordinate");
@@ -78,18 +112,27 @@ inline float AtlasWorldHeight(const Atlas& atlas,double x,double y){
         "Invalid original terrain world-height coordinate");
     const int ix=static_cast<int>(std::floor(x)),iy=static_cast<int>(std::floor(y));
     const float fx=static_cast<float>(x-ix),fy=static_cast<float>(y-iy);float value=0,total=0;
-    for(int dy=0;dy<=1;++dy)for(int dx=0;dx<=1;++dx){
-        int px=ix+dx,py=iy+dy;
-        if(atlas.wrapX)px=WrappedCoordinate(px,static_cast<int>(atlas.width));
-        else if(px<0||px>=static_cast<int>(atlas.width))continue;
+    // Mesh and lighting-field vertices land on integer texels. Visit only
+    // contributing taps and resolve the row once for fractional water samples.
+    for(int dy=0;dy<2;++dy){
+        const float wy=dy?fy:1-fy;
+        if(wy==0)continue;
+        int py=iy+dy;
         if(atlas.wrapY)py=WrappedCoordinate(py,static_cast<int>(atlas.height));
         else if(py<0||py>=static_cast<int>(atlas.height))continue;
-        const auto index=static_cast<std::size_t>(py)*atlas.width+static_cast<unsigned>(px);
-        if(!atlas.known[index])continue;
-        const float weight=(dx?fx:1-fx)*(dy?fy:1-fy);if(weight==0)continue;
-        const auto raw=Detail::HeightmapCode(atlas,index);
-        const float height=OriginalTerrainCacheSampling::NormalizeOriginalHeight(raw,DisplayHeightOriginCandidate());
-        value+=height*weight;total+=weight;
+        const auto row=static_cast<std::size_t>(py)*atlas.width;
+        for(int dx=0;dx<2;++dx){
+            const float weight=(dx?fx:1-fx)*wy;
+            if(weight==0)continue;
+            int px=ix+dx;
+            if(atlas.wrapX)px=WrappedCoordinate(px,static_cast<int>(atlas.width));
+            else if(px<0||px>=static_cast<int>(atlas.width))continue;
+            const auto index=row+static_cast<unsigned>(px);
+            if(!atlas.known[index])continue;
+            const auto raw=Detail::HeightmapCode(atlas,index);
+            const float height=OriginalTerrainCacheSampling::NormalizeOriginalHeight(raw,DisplayHeightOriginCandidate());
+            value+=height*weight;total+=weight;
+        }
     }
     return total>0?value/total:0;
 }

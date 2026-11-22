@@ -23,10 +23,21 @@ std::unique_ptr<OriginalCatalog> LoadOriginalCatalog(ID3D11Device* device,std::v
     ComPtr<ID3DBlob> vertex,pixel,diagnostic;
     const auto flags=D3DCOMPILE_ENABLE_STRICTNESS|D3DCOMPILE_WARNINGS_ARE_ERRORS;
     const std::string terrainSource=std::string(OSL::ShaderSource)+OT::ShaderSource;
-    Check(D3DCompile(terrainSource.data(),terrainSource.size(),"OriginalTerrain",nullptr,nullptr,"vertexMain","vs_5_0",flags,0,&vertex,&diagnostic),"Original terrain vertex shader compile");
+    Check(D3DCompile(Tess::ShaderSource,sizeof(Tess::ShaderSource)-1,"OriginalTerrainPatch",nullptr,nullptr,"worldVertexMain","vs_5_0",flags,0,&vertex,&diagnostic),"Original terrain world placement shader compile");
     Check(D3DCompile(terrainSource.data(),terrainSource.size(),"OriginalTerrain",nullptr,nullptr,"pixelMain","ps_5_0",flags,0,&pixel,&diagnostic),"Original terrain pixel shader compile");
     Check(device->CreateVertexShader(vertex->GetBufferPointer(),vertex->GetBufferSize(),nullptr,&result->vs),"Original terrain vertex shader");
     Check(device->CreatePixelShader(pixel->GetBufferPointer(),pixel->GetBufferSize(),nullptr,&result->ps),"Original terrain pixel shader");
+    const auto patchShader=[&](const char* entry,const char* profile){
+        ComPtr<ID3DBlob> shader;
+        Check(D3DCompile(Tess::ShaderSource,sizeof(Tess::ShaderSource)-1,"OriginalTerrainPatch",nullptr,nullptr,
+            entry,profile,flags,0,&shader,nullptr),entry);
+        return shader;
+    };
+    const auto controls=patchShader("worldControlMain","vs_5_0");
+    const auto hull=patchShader("hullMain","hs_5_0"),domain=patchShader("worldDomainMain","ds_5_0");
+    Check(device->CreateVertexShader(controls->GetBufferPointer(),controls->GetBufferSize(),nullptr,&result->controlVs),"Terrain control VS");
+    Check(device->CreateHullShader(hull->GetBufferPointer(),hull->GetBufferSize(),nullptr,&result->hs),"Terrain hull shader");
+    Check(device->CreateDomainShader(domain->GetBufferPointer(),domain->GetBufferSize(),nullptr,&result->ds),"Terrain domain shader");
     const D3D11_INPUT_ELEMENT_DESC elements[]={
         {"POSITION",0,DXGI_FORMAT_R32G32B32_FLOAT,0,0,D3D11_INPUT_PER_VERTEX_DATA,0},
         {"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,12,D3D11_INPUT_PER_VERTEX_DATA,0},
@@ -37,6 +48,8 @@ std::unique_ptr<OriginalCatalog> LoadOriginalCatalog(ID3D11Device* device,std::v
     Check(device->CreateInputLayout(elements,static_cast<UINT>(std::size(elements)),vertex->GetBufferPointer(),vertex->GetBufferSize(),&result->layout),"Original terrain vertex layout");
     D3D11_BUFFER_DESC cb{};cb.ByteWidth=sizeof(OriginalConstants);cb.Usage=D3D11_USAGE_DEFAULT;cb.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
     Check(device->CreateBuffer(&cb,nullptr,&result->constants),"Original terrain chunk constants");
+    cb.ByteWidth=sizeof(Tess::DomainConstants);
+    Check(device->CreateBuffer(&cb,nullptr,&result->patchConstants),"Original terrain patch placement constants");
     const auto indexBuffer=[&](const std::vector<std::uint16_t>& values,ComPtr<ID3D11Buffer>& target){
         D3D11_BUFFER_DESC bd{};bd.ByteWidth=static_cast<UINT>(values.size()*sizeof(std::uint16_t));
         bd.Usage=D3D11_USAGE_IMMUTABLE;bd.BindFlags=D3D11_BIND_INDEX_BUFFER;
@@ -49,6 +62,13 @@ std::unique_ptr<OriginalCatalog> LoadOriginalCatalog(ID3D11Device* device,std::v
         indices.insert(indices.end(),{a,b,c,b,d,c});
     }
     indexBuffer(indices,result->indices);indexBuffer({0,1,2,1,3,2},result->quadIndices);
+    for(unsigned i=0;i<result->levels.size();++i){
+        const auto grid=OT::Lod::BuildGridIndices(i);
+        auto& level=result->levels[i];
+        indexBuffer(grid.rim,level.rim);indexBuffer(grid.controls,level.controls);
+        level.rimCount=static_cast<unsigned>(grid.rim.size());
+        level.controlCount=static_cast<unsigned>(grid.controls.size());
+    }
     return result;
 }
 
@@ -72,6 +92,7 @@ std::shared_ptr<OriginalGpuMesh> OriginalMesh(Cache& cache,OriginalSurface& surf
     const int startX=static_cast<int>(column*64),startY=static_cast<int>(row*64);
     result->slots=OT::ChunkTop8(surface.atlas,cache.original->table,startX,startY,64,64,OT::HeightWorldScaleCandidate);
     result->dense=result->slots.count!=0;
+    result->bicubicInterior=result->dense && OT::HasPatchControls(surface.atlas,column,row);
     const auto vertices=OT::PrepareTerrainVertices<OriginalVertex>(surface.atlas,cache.original->table,result->slots,column,row);
     D3D11_BUFFER_DESC bd{};bd.ByteWidth=static_cast<UINT>(vertices.size()*sizeof(OriginalVertex));
     bd.Usage=D3D11_USAGE_IMMUTABLE;bd.BindFlags=D3D11_BIND_VERTEX_BUFFER;
@@ -79,10 +100,24 @@ std::shared_ptr<OriginalGpuMesh> OriginalMesh(Cache& cache,OriginalSurface& surf
     surface.meshes[index]=result;return result;
 }
 
+std::array<float,16> TerrainViewProjection(const XMMATRIX& viewProjection){
+    XMFLOAT4X4 matrix;XMStoreFloat4x4(&matrix,viewProjection);
+    std::array<float,16> projection;
+    static_assert(sizeof(matrix)==sizeof(projection),"Unexpected terrain view matrix layout");
+    std::memcpy(projection.data(),&matrix,sizeof(matrix));
+    return projection;
+}
+
 void PrepareOriginalGround(const WorldView& view,Cache& cache,const XMMATRIX& camera,const XMMATRIX& matrix,
     unsigned width,unsigned height,unsigned mapWidth,GroundData& candidate,TerrainFrame& frame){
     candidate.original=std::make_unique<OriginalGroundData>();auto& ground=*candidate.original;
     ground.surface=PrepareOriginalSurface(view,*cache.original);
+    const auto patchFrame=OT::PatchFrameForCamera(ground.surface->atlas,view.cameraX,view.cameraY);
+    const auto vp=TerrainViewProjection(matrix);
+    const float low=-OT::HeightOffsetCandidate*OT::HeightWorldScaleCandidate;
+    const float high=(1-OT::HeightOffsetCandidate)*OT::HeightWorldScaleCandidate;
+    double largestFootprint=0;
+    std::uint64_t fullResolutionTriangles=0;
     const float centerX=static_cast<float>(view.cameraX)+static_cast<float>(view.cameraY&1)*0.5f;
     const float centerZ=-static_cast<float>(view.cameraY)*OT::RowSpacing;
     std::vector<std::array<std::uint32_t,2>> states(static_cast<std::size_t>(view.gridWidth)*view.gridHeight);
@@ -128,18 +163,70 @@ void PrepareOriginalGround(const WorldView& view,Cache& cache,const XMMATRIX& ca
         }
         const auto x=static_cast<unsigned>(OT::WrappedCoordinate(column,view.gridWidth));
         const auto y=static_cast<unsigned>(OT::WrappedCoordinate(row,view.gridHeight));
-        auto mesh=OriginalMesh(cache,*ground.surface,x,y);frame.triangles+=mesh->dense?8192u:2u;
-        Require(frame.triangles<=24000000,"Original visible heightfield exceeds its controlled mesh bound");
-        ground.draws.push_back({std::move(mesh),column,row});
+        auto mesh=OriginalMesh(cache,*ground.surface,x,y);
+        // Every grid level shares the same full-resolution vertex allocation.
+        fullResolutionTriangles+=mesh->dense?8192u:2u;
+        Require(fullResolutionTriangles<=24000000,"Original visible heightfield exceeds its controlled mesh bound");
+        const auto patch=OT::PatchWorld::Place(patchFrame,x,y,column,row,0);
+        if(mesh->bicubicInterior)
+            largestFootprint=(std::max)(largestFootprint,OT::Lod::ProjectedFootprint(patch,vp,mapWidth,low,high));
+        ground.draws.push_back({std::move(mesh),column,row,patch});
+    }
+    ground.lod=ground.surface->lastLod;
+    if(largestFootprint>0){
+        // The V2 hull emits one segment per edge. Four pixels is the target
+        // edge length recorded in the local DX11 terrain settings.
+        constexpr unsigned targetEdgePixels=4;
+        const auto requested=OT::Lod::RequestedLevel(largestFootprint,OT::PatchWorld::CellIntervals,targetEdgePixels,Tess::WorldEdgeSegments);
+        ground.lod=ground.lod.Update(requested);
+    }
+    frame.terrainGridLevel=ground.lod.GridLevel();
+    const auto& level=cache.original->levels[frame.terrainGridLevel];
+    for(const auto& draw:ground.draws){
+        if(draw.mesh->bicubicInterior){
+            const unsigned patches=level.controlCount/16;
+            frame.bicubicPatches+=patches;
+            frame.triangles+=level.rimCount/3+2*patches;
+        }else frame.triangles+=draw.mesh->dense?8192u:2u;
     }
     (void)width;
 }
 
-void DrawOriginalGround(const WorldView& view,Cache& cache,const OriginalGroundData& ground,bool fogEnabled,LightingCatalog* lighting=nullptr,
+// Color, integer plot IDs and the terrain shadow caster all submit the same
+// world-space vertices. Control heights stay in the existing mesh buffer.
+void DrawPlacedTerrainMesh(Cache& cache,const OriginalDraw& draw,unsigned gridLevel,Tess::DomainConstants& domain){
+    auto& catalog=*cache.original;auto* context=cache.context.Get();const auto& mesh=*draw.mesh;
+    ID3D11Buffer* cb=catalog.patchConstants.Get();
+    domain.SetPlacement(draw.patch);context->UpdateSubresource(cb,0,nullptr,&domain,0,0);
+    context->VSSetConstantBuffers(7,1,&cb);context->VSSetShader(catalog.vs.Get(),nullptr,0);
+    context->IASetInputLayout(catalog.layout.Get());context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ID3D11Buffer* vertices=mesh.vertices.Get();const UINT stride=sizeof(OriginalVertex),offset=0;
+    context->IASetVertexBuffers(0,1,&vertices,&stride,&offset);
+    if(!mesh.bicubicInterior){
+        context->IASetIndexBuffer(mesh.dense?catalog.indices.Get():catalog.quadIndices.Get(),DXGI_FORMAT_R16_UINT,0);
+        context->DrawIndexed(mesh.dense?64*64*6:6,0,0);return;
+    }
+    const auto& level=catalog.levels[gridLevel];
+    context->IASetIndexBuffer(level.rim.Get(),DXGI_FORMAT_R16_UINT,0);
+    context->DrawIndexed(level.rimCount,0,0);
+    domain.SetPlacement(OT::PatchWorld::Interior(draw.patch,gridLevel));context->UpdateSubresource(cb,0,nullptr,&domain,0,0);
+    context->HSSetConstantBuffers(7,1,&cb);context->DSSetConstantBuffers(7,1,&cb);
+    context->VSSetShader(catalog.controlVs.Get(),nullptr,0);context->HSSetShader(catalog.hs.Get(),nullptr,0);
+    context->DSSetShader(catalog.ds.Get(),nullptr,0);
+    context->IASetIndexBuffer(level.controls.Get(),DXGI_FORMAT_R16_UINT,0);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_16_CONTROL_POINT_PATCHLIST);
+    context->DrawIndexed(level.controlCount,0,0);
+    context->HSSetShader(nullptr,nullptr,0);context->DSSetShader(nullptr,nullptr,0);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+}
+
+void DrawOriginalGround(const WorldView& view,Cache& cache,const OriginalGroundData& ground,const XMMATRIX& viewProjection,bool fogEnabled,LightingCatalog* lighting=nullptr,
     ID3D11ShaderResourceView* reflection=nullptr,unsigned mapWidth=1,unsigned height=1){
     auto& catalog=*cache.original;
     cache.context->IASetInputLayout(catalog.layout.Get());cache.context->VSSetShader(catalog.vs.Get(),nullptr,0);cache.context->PSSetShader(catalog.ps.Get(),nullptr,0);
     ID3D11Buffer* cb=catalog.constants.Get();cache.context->VSSetConstantBuffers(1,1,&cb);cache.context->PSSetConstantBuffers(1,1,&cb);
+    auto domain=Tess::WorldDomainConstants(TerrainViewProjection(viewProjection));
+    const auto gridLevel=ground.lod.GridLevel();
     if(lighting){
         OriginalLightingConstants parameters{};
         parameters.info[0]=1;parameters.info[2]=1;
@@ -152,7 +239,6 @@ void DrawOriginalGround(const WorldView& view,Cache& cache,const OriginalGroundD
         if(!cache.screenLighting)cache.screenLighting=std::make_unique<ScreenLightingGpu>(CreateScreenLightingGpu(cache.device.Get()));
         BindScreenLighting(cache.context.Get(),*cache.screenLighting,reflection,mapWidth,height,view.screenLightingPolicy);
     }
-    const float centerX=static_cast<float>(view.cameraX)+static_cast<float>(view.cameraY&1)*0.5f,centerZ=-static_cast<float>(view.cameraY)*OT::RowSpacing;
     for(const auto& draw:ground.draws){
         const auto& mesh=*draw.mesh;OriginalConstants constants{};std::array<ID3D11ShaderResourceView*,45> resources{};
         for(unsigned i=0;i<mesh.slots.count;++i){
@@ -172,7 +258,8 @@ void DrawOriginalGround(const WorldView& view,Cache& cache,const OriginalGroundD
             if(mesh.lightingField){resources[41]=mesh.lightingField->normal.Get();resources[42]=mesh.lightingField->shadow.Get();}
             const auto policy=OSL::ResolvePolicy(view.screenLightingPolicy);if(policy.specular)resources[44]=reflection;
         }
-        constants.placement[0]=static_cast<float>(draw.column)-centerX;constants.placement[1]=-static_cast<float>(draw.row)*OT::RowSpacing-centerZ;
+        const auto origin=OT::PatchWorld::DisplayOrigin(draw.patch);
+        constants.placement[0]=origin[0];constants.placement[1]=origin[1];
         constants.placement[2]=static_cast<float>(draw.column);constants.placement[3]=static_cast<float>(draw.row);
         constants.mapInfo[0]=static_cast<float>(view.gridWidth);constants.mapInfo[1]=static_cast<float>(view.gridHeight);
         constants.mapInfo[2]=view.wrapX?1.0f:0.0f;constants.mapInfo[3]=view.wrapY?1.0f:0.0f;
@@ -184,14 +271,13 @@ void DrawOriginalGround(const WorldView& view,Cache& cache,const OriginalGroundD
         constants.fogInfo[3]=OriginalTerrainCacheSampling::SourceMetricYDefault;
         cache.context->UpdateSubresource(catalog.constants.Get(),0,nullptr,&constants,0,0);
         cache.context->PSSetShaderResources(0,static_cast<UINT>(resources.size()),resources.data());
-        ID3D11Buffer* vertices=mesh.vertices.Get();const UINT stride=sizeof(OriginalVertex),offset=0;
-        cache.context->IASetVertexBuffers(0,1,&vertices,&stride,&offset);
-        cache.context->IASetIndexBuffer(mesh.dense?catalog.indices.Get():catalog.quadIndices.Get(),DXGI_FORMAT_R16_UINT,0);
-        cache.context->DrawIndexed(mesh.dense?64*64*6:6,0,0);
+        DrawPlacedTerrainMesh(cache,draw,gridLevel,domain);
     }
     std::array<ID3D11ShaderResourceView*,45> clear{};cache.context->PSSetShaderResources(0,static_cast<UINT>(clear.size()),clear.data());
     if(lighting)UnbindScreenLighting(cache.context.Get());
     ID3D11Buffer* nullBuffer=nullptr;cache.context->VSSetConstantBuffers(1,1,&nullBuffer);cache.context->PSSetConstantBuffers(1,1,&nullBuffer);
+    cache.context->VSSetConstantBuffers(7,1,&nullBuffer);
+    cache.context->HSSetConstantBuffers(7,1,&nullBuffer);cache.context->DSSetConstantBuffers(7,1,&nullBuffer);
     cache.context->PSSetConstantBuffers(3,1,&nullBuffer);
     cache.context->PSSetConstantBuffers(6,1,&nullBuffer);
     ID3D11SamplerState* nullSampler=nullptr;cache.context->PSSetSamplers(1,1,&nullSampler);

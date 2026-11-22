@@ -841,7 +841,13 @@ public:
     void AddPopup(const CvPopupInfo& popup) override {
         if(state_->gameThread!=GetCurrentThreadId() || !state_->gameLock.HeldByCurrentThread())
             throw std::logic_error("UI popup dispatch requires the GameCore owner lock");
-        if(!state_->addPopup)Unsupported("ICvUserInterface1::AddPopup");
+        if(!state_->addPopup){
+#if defined(ZEROSIS_HEADLESS_TURN_HOST)
+            std::fprintf(stderr,"FULL_TURN_UNBOUND_POPUP=%d,%d,%d,%d\n",int(popup.eButtonPopupType),
+                         popup.iData1,popup.iData2,popup.iData3);
+#endif
+            Unsupported("ICvUserInterface1::AddPopup");
+        }
         state_->addPopup(popup);
     }
     void lookAtSelectionPlot(bool release=false) override {

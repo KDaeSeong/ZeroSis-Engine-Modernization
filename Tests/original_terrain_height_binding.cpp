@@ -56,6 +56,16 @@ static void Sampling(){
     // Known NaN at a zero-weight neighbour must not be fetched.
     a.heights[1]=a.heights[2]=a.heights[3]=std::numeric_limits<float>::quiet_NaN();
     Near(T::AtlasWorldHeight(a,0,0),World(15300),2e-7);
+    // A double fraction can round to exactly 0 or 1 in the float weight calculation.
+    auto corner=Atlas();
+    corner.wrapX=corner.wrapY=false;
+    corner.heights.assign(4,std::numeric_limits<float>::quiet_NaN());
+    Store(corner,3,25500);
+    const auto belowOne=std::nextafter(1.0,0.0);
+    Near(T::AtlasWorldHeight(corner,belowOne,belowOne),World(25500),2e-7);
+    Near(T::AtlasWorldHeight(corner,1,belowOne),World(25500),2e-7);
+    Store(corner,0,15300);
+    Near(T::AtlasWorldHeight(corner,std::nextafter(0.0,1.0),0),World(15300),2e-7);
     // Hidden nonzero-weight payloads are excluded before numeric reads.
     a.known[1]=a.known[2]=a.known[3]=0;
     Near(T::AtlasWorldHeight(a,0.25,0.5),World(15300),2e-7);

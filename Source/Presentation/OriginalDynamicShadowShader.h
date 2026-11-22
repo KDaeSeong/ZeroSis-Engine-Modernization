@@ -27,13 +27,14 @@ cbuffer DynamicShadow:register(b5){row_major float4x4 shadowViewProjection;
     float4 shadowPlacement,shadowMapInfo,dynamicShadowInfo;};
 Texture2D<uint2> ShadowPlotState:register(t0);
 struct V{float3 p:POSITION;};
-struct P{float4 p:SV_POSITION;float2 world:TEXCOORD0;};
+struct P{float4 p:SV_POSITION;float2 uv:TEXCOORD0;};
 P groundVertex(V v){P p;float3 world=v.p+float3(shadowPlacement.x,0,shadowPlacement.y);
-    p.p=mul(float4(world,1),shadowViewProjection);p.world=float2(shadowPlacement.z+v.p.x,shadowPlacement.w-v.p.z/0.866025404);return p;}
+    p.p=mul(float4(world,1),shadowViewProjection);p.uv=float2(v.p.x,-v.p.z/0.866025404);return p;}
 int RoundAway(float v){return v<0?-(int)floor(-v+0.5):(int)floor(v+0.5);}
 int Wrapped(int v,int span){uint m=v<0?uint(-(v+1))+1u:uint(v);uint r=m%uint(span);return v<0&&r!=0?span-int(r):int(r);}
 void groundPixel(P p){
-    float q=p.world.x-p.world.y*0.5;float3 f=float3(q,p.world.y,-q-p.world.y);
+    float2 world=shadowPlacement.zw+p.uv;
+    float q=world.x-world.y*0.5;float3 f=float3(q,world.y,-q-world.y);
     int3 c=int3(RoundAway(f.x),RoundAway(f.y),RoundAway(f.z));float3 d=abs(float3(c)-f);
     if(d.x>d.y&&d.x>d.z)c.x=-c.y-c.z;else if(d.y>d.z)c.y=-c.x-c.z;else c.z=-c.x-c.y;
     int2 cell=int2(c.x+(int)floor(c.y*0.5),c.y);

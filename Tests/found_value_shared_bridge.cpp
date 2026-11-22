@@ -12,6 +12,8 @@
 #include <thread>
 #include <vector>
 
+bool evaluate_found_value_serial(const ZeroSisFoundValueInput& input, std::int32_t& score);
+
 namespace {
 constexpr std::size_t kCenterOffset = 7u * 15u + 7u;
 std::uint32_t checks = 0;
@@ -171,6 +173,71 @@ bool same_results(const std::vector<ZeroSisFoundValueResult>& a,
     return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(a[0])) == 0;
 }
 
+bool check_slot_order_and_faith_carry() {
+    auto c = common();
+    c.human_player = 1;
+    c.settler_food_multiplier = 0;
+    c.settler_faith_multiplier = 1;
+    for (auto& weight : c.ring_modifier) weight = 1;
+
+    ZeroSisFoundValueSharedPlot center{};
+    center.tile.present = 1;
+    auto neighbor = center;
+    neighbor.tile.faith_value = 5;
+    neighbor.strategic_by_distance[1] = 2;
+    neighbor.strategic_by_distance[4] = 11;
+    neighbor.strategic_by_distance[5] = 17;
+    const std::vector<ZeroSisFoundValueSharedPlot> plots{center, neighbor};
+
+    ZeroSisFoundValueSharedCandidate center_only{};
+    center_only.center_can_found_visible = center_only.center_can_found_full = 1;
+    for (auto& slot : center_only.slots)
+        slot.map_plot_index = ZEROSIS_FOUND_VALUE_SHARED_MISSING_PLOT;
+    center_only.slots[kCenterOffset] = {0, 0};
+    auto near_first = center_only;
+    near_first.slots[0] = {1, 1};
+    near_first.slots[kCenterOffset + 1] = {1, 4};
+    near_first.slots[ZEROSIS_FOUND_VALUE_TILE_COUNT - 1] = {1, 5};
+    auto far_first = near_first;
+    far_first.slots[0].distance = 4;
+    far_first.slots[kCenterOffset + 1].distance = 1;
+    auto rejected = near_first;
+    rejected.center_can_found_full = 0;
+    const std::array<ZeroSisFoundValueSharedCandidate, 4> sites{{near_first, far_first, rejected, center_only}};
+
+    // Only faith and the per-distance strategic helper contribute. The center
+    // inherits five faith in the first ordering and zero in the second.
+    const std::array<std::int32_t, 4> expected{{7 + 5 + 16 + 22, 11 + 0 + 7 + 22, 0, 0}};
+    std::array<std::int32_t, 4> serial{};
+    for (std::size_t index = 0; index < sites.size(); ++index) {
+        const auto dense = dense_reference(c, sites[index], plots);
+        if (!evaluate_found_value_serial(dense, serial[index]) || serial[index] != expected[index]) return false;
+        ++checks;
+    }
+    const auto original_common = c;
+    const auto original_plots = plots;
+    const auto original_sites = sites;
+    for (const auto workers : {1u, 2u, 4u}) {
+        const auto cfg = config(workers);
+        ZeroSisFoundValueMetrics metrics{};
+        std::array<ZeroSisFoundValueResult, 4> output{};
+        if (ZeroSisFoundValueEvaluateSharedBatch(&c, plots.data(), 2, sites.data(), 4, &cfg,
+                output.data(), &metrics) != ZEROSIS_FOUND_VALUE_OK || metrics.workers_started != workers)
+            return false;
+        for (std::size_t index = 0; index < sites.size(); ++index) {
+            if (output[index].status != ZEROSIS_FOUND_VALUE_OK || output[index].score != serial[index]) {
+                std::fprintf(stderr, "slot order: workers=%u site=%zu score=%d expected=%d\n",
+                             workers, index, output[index].score, expected[index]);
+                return false;
+            }
+            ++checks;
+        }
+    }
+    return std::memcmp(&c, &original_common, sizeof(c)) == 0 &&
+           std::memcmp(plots.data(), original_plots.data(), plots.size() * sizeof(plots[0])) == 0 &&
+           std::memcmp(sites.data(), original_sites.data(), sites.size() * sizeof(sites[0])) == 0;
+}
+
 bool check_ordered_dense_differential() {
     auto c = common();
     std::vector<ZeroSisFoundValueSharedPlot> plots;
@@ -212,8 +279,11 @@ bool check_ordered_dense_differential() {
 
     std::vector<ZeroSisFoundValueInput> dense(candidates.size());
     std::vector<ZeroSisFoundValueResult> expected(candidates.size());
-    for (std::size_t i = 0; i < candidates.size(); ++i)
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
         dense[i] = dense_reference(c, candidates[i], plots);
+        std::int32_t serial = 0;
+        if (!evaluate_found_value_serial(dense[i], serial) || outputs[0][i].score != serial) return false;
+    }
     ZeroSisFoundValueMetrics dense_metrics{};
     auto cfg = config(2);
     if (ZeroSisFoundValueEvaluateBatch(dense.data(), static_cast<std::uint32_t>(dense.size()),
@@ -270,6 +340,8 @@ bool check_prelaunch_validation_and_failure_atomicity() {
     ++checks;
 
     candidates[1] = candidate(1, 0);
+    // Even a rejected site must pass full slot validation before any job starts.
+    candidates[1].center_can_found_full = 0;
     candidates[1].slots[0].map_plot_index = ZEROSIS_FOUND_VALUE_SHARED_MISSING_PLOT;
     candidates[1].slots[0].distance = 1;
     if (ZeroSisFoundValueEvaluateSharedBatch(&c, plots.data(), 2, candidates.data(), 2,
@@ -294,6 +366,25 @@ bool check_prelaunch_validation_and_failure_atomicity() {
         std::memcmp(output.data(), original.data(), sizeof(output)) != 0 ||
         metrics.jobs_started == 0 || metrics.jobs_completed == 0) return false;
     if (ZeroSisFoundValueSharedLastBatchId() != 0) return false;
+    ++checks;
+
+    // Only the last slot of the second candidate uses the overflowing
+    // strategic helper. The first score must not be published on failure.
+    plots[1] = fact(1);
+    plots[1].strategic_by_distance[5] = (std::numeric_limits<std::int32_t>::max)();
+    c.settler_strategic_multiplier = 2;
+    candidates[0] = candidate(0, 0);
+    candidates[1].slots[ZEROSIS_FOUND_VALUE_TILE_COUNT - 1] = {1, 5};
+    if (ZeroSisFoundValueEvaluateSharedBatch(&c, plots.data(), 2, candidates.data(), 2,
+            &cfg, output.data(), &metrics) != ZEROSIS_FOUND_VALUE_OVERFLOW ||
+        std::memcmp(output.data(), original.data(), sizeof(output)) != 0 ||
+        metrics.jobs_completed != 2 || ZeroSisFoundValueSharedLastBatchId() != 0) return false;
+    ++checks;
+
+    candidates[1].center_can_found_full = 0;
+    if (ZeroSisFoundValueEvaluateSharedBatch(&c, plots.data(), 2, candidates.data(), 2,
+            &cfg, output.data(), &metrics) != ZEROSIS_FOUND_VALUE_OK ||
+        output[1].status != ZEROSIS_FOUND_VALUE_OK || output[1].score != 0) return false;
     ++checks;
     return true;
 }
@@ -383,6 +474,9 @@ int main() {
     }
     if (!check_invalid_ranges_and_empty_batch()) {
         std::fprintf(stderr, "FAIL owner_flags_overlap_and_empty_batch\n"); return 4;
+    }
+    if (!check_slot_order_and_faith_carry()) {
+        std::fprintf(stderr, "FAIL slot_order_and_faith_carry\n"); return 5;
     }
     std::printf("FOUND_VALUE_SHARED_BRIDGE_PASS checks=%u GAMECORE_LOADED=false TRACE_CAPTURED=false\n", checks);
     return 0;

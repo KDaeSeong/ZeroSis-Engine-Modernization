@@ -1,6 +1,7 @@
 #pragma once
 #include "NewGameConfig.h"
 #include "NewGameLuaProbe.h"
+#include "TurnBenchmarkObservation.h"
 #include <array>
 
 namespace ZeroSisHost {
@@ -13,10 +14,20 @@ public:
         if(!host.scripts || *host.scripts->LastError())throw std::logic_error("New game requires a script service with no prior failures");
         started_=true;std::puts("NEW_GAME_PHASE=read_configuration");
         std::printf("PLATFORM_STATISTICS_AVAILABLE=%s\n",EngineServices::PlatformStatisticsAvailable()?"true":"false");
-        const auto config=NewGameConfig::Read(database);
+        auto config=NewGameConfig::Read(database);
+        if(TurnBenchmarkObservation::Enabled()){
+            const char* human=std::getenv("ZEROSIS_BENCHMARK_HUMAN");
+            if(human && *human)config.SelectBenchmarkHuman(database,human);
+        }
         std::unique_ptr<ICvPreGame1> pregame(context.GetPreGame());
         if(!pregame)throw std::runtime_error("GameCore did not provide the pregame interface");
         std::puts("NEW_GAME_PHASE=apply_configuration");config.ApplyAndVerify(*pregame);
+        if(TurnBenchmarkObservation::Enabled()){
+            std::printf("FULL_TURN_SEEDS=%u,%u\n",pregame->mapRandomSeed(),pregame->syncRandomSeed());
+            std::printf("FULL_TURN_MAJORS=%d,%d,%d,%d\n",int(pregame->civilization(PlayerTypes(0))),
+                int(pregame->leaderHead(PlayerTypes(0))),int(pregame->civilization(PlayerTypes(1))),
+                int(pregame->leaderHead(PlayerTypes(1))));
+        }
         std::puts("NEW_GAME_CONFIGURATION_VERIFIED");
         std::unique_ptr<ICvGame1> game(context.GetGame());
         if(!game)throw std::runtime_error("GameCore did not provide the game interface");

@@ -303,7 +303,7 @@ def main() -> None:
               "source_inputs_unchanged_pre_post": True, "source_sdk_modified": False,
               "gamecore_loaded": False, "civ_v_runtime_tested": False,
               "performance_claim": False,
-              "scope": "SHARED_IMMUTABLE_PLOT_FACTS_MATERIALIZED_TO_DENSE_KERNEL_VS_EXACT_EXTRACTED_BASE_AND_SETTLER_BODIES"}
+              "scope": "SHARED_IMMUTABLE_PLOT_FACTS_AND_DENSE_KERNEL_VS_EXACT_EXTRACTED_BASE_AND_SETTLER_BODIES"}
     destination = evidence / "conformance.json"
     destination.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"status": report["status"], "unique_id": identifier,

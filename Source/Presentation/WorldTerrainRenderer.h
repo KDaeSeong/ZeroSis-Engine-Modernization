@@ -19,6 +19,8 @@ struct TerrainFrame {
     std::uint64_t unitTriangles=0;
     unsigned modelUnits=0;
     bool hardware=false;
+    std::uint64_t bicubicPatches=0; // Ground color/ID submission, excludes shadow passes.
+    unsigned terrainGridLevel=0;
 };
 
 // D3D11 mesh, depth and integer-ID passes share one camera and geometry.

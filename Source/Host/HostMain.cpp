@@ -108,6 +108,10 @@ static int RunHostMain(int argc,wchar_t** argv) {
         const bool checkTurnCycle=checkRestore || (argc==3 && std::wcscmp(argv[1],L"--check-turn-cycle")==0);
         const bool checkFirstTurn=checkTradeRoute || checkFoundCity || checkTurnCycle || (argc==3 && std::wcscmp(argv[1],L"--check-first-turn")==0);
         const bool checkNewGame=(play && !playLoad) || checkFirstTurn || (argc==3 && std::wcscmp(argv[1],L"--check-new-game")==0);
+#if defined(ZEROSIS_HEADLESS_TURN_HOST)
+        if(checkUi || checkFoundCity || checkTradeRoute)
+            throw std::invalid_argument("This headless turn Host supports the ordinary save/restore turn fixture");
+#endif
         if(!checkData && !initialize && !checkCore && !checkNewGame && !play) {
             std::fputs("Usage: ZeroSisHost_x64 --capabilities | --verify-bundle | --check-data <language> | --initialize <language> | --check-core <language> | --check-new-game <language> | --check-first-turn <language> | --check-turn-cycle <language> | --check-save-restore <language> [extra-turns] | --check-save-restore-ui <language> [extra-turns] | --check-save-restore-ui-promotions <language> <extra-turns> | --check-save-restore-ui-actions <language> <extra-turns> | --check-found-city <language> | --check-city-decisions <language> | --check-city-production-ui <language> | --check-city-production-ui-window <language> | --check-city-research-ui <language> | --check-city-research-ui-window <language> | --check-city-research-tree-ui <language>\n",stderr);return 2;
         }
@@ -118,7 +122,9 @@ static int RunHostMain(int argc,wchar_t** argv) {
         if(initialize || checkCore || checkNewGame || play){run->InitializeCore();std::puts(playLoad?
             "CORE_INITIALIZED; restoring private interactive checkpoint.":checkNewGame?
             "CORE_INITIALIZED; attempting isolated new game.":"CORE_INITIALIZED; new game and turn execution remain unimplemented.");}
+#if !defined(ZEROSIS_HEADLESS_TURN_HOST)
         if(checkUi)run->EnableUiPopups(checkUiWindow,displayResize,refreshClosed);
+#endif
         if(checkCore)std::puts(run->CoreObservation().c_str());
         if(checkNewGame)std::puts(run->NewGameObservation().c_str());
 #if defined(ZEROSIS_UI_WINDOW_PRESENTATION)
@@ -158,18 +164,21 @@ static int RunHostMain(int argc,wchar_t** argv) {
         }
 #endif
         if(checkFirstTurn)std::puts(run->FirstTurnObservation(checkTurnCycle).c_str());
+#if !defined(ZEROSIS_HEADLESS_TURN_HOST)
         if(checkTradeRoute){
             run->TradeRouteFixtureObservation();run->Shutdown();RequireGameCoreAbsent();
             std::puts("TRADE_ROUTE_FIXTURE_PROBE_PASS GAMECORE_UNLOADED=true UI_RENDERING=false");return 0;
         }
         ZeroSisHost::FoundCityResult founded;
         if(checkFoundCity)founded=run->FoundCityObservation();
+#endif
         std::wstring checkpoint;std::string checkpointState;
         if(checkRestore || checkFoundCity)checkpoint=run->SaveCheckpoint(checkpointState);
         run->Shutdown();
         if(checkCore)std::puts(run->CoreShutdownObservation().c_str());
         RequireGameCoreAbsent();
         if(initialize || checkCore || checkNewGame)std::puts("CORE_MODULE_UNLOADED=true");
+#if !defined(ZEROSIS_HEADLESS_TURN_HOST)
         if(checkFoundCity){
             run.reset();std::puts("FOUND_CITY_RESTORE_FRESH_SESSION=true");
             run.reset(new ZeroSisHost::HostRun(ZeroSisHost::ExecutableDirectory()));
@@ -200,13 +209,17 @@ static int RunHostMain(int argc,wchar_t** argv) {
             std::puts("FOUND_CITY_RESTORED_CORE_MODULE_UNLOADED=true\nFOUND_CITY_SHUTDOWN_PASS GAMECORE_LOADED=true CITY_CREATED=true CITY_RESTORE_VERIFIED=true TURN_ADVANCE_VERIFIED=false");
             return 0;
         }
+#endif
         if(checkRestore){
             run.reset();
             std::puts("NATIVE_RESTORE_FRESH_SESSION=true");
             run.reset(new ZeroSisHost::HostRun(ZeroSisHost::ExecutableDirectory()));
             run->Prepare(ZeroSisHost::Utf8(argv[2]));
             std::printf("RESTORE_SESSION_DIRECTORY=%s\n",ZeroSisHost::Utf8(run->SessionDirectory()).c_str());
-            run->InitializeCore();if(checkUi)run->EnableUiPopups(checkUiWindow,displayResize,refreshClosed);
+            run->InitializeCore();
+#if !defined(ZEROSIS_HEADLESS_TURN_HOST)
+            if(checkUi)run->EnableUiPopups(checkUiWindow,displayResize,refreshClosed);
+#endif
             run->RestoreCheckpoint(checkpoint,checkpointState,extraTurns,fixturePromotions,fixtureUnitActions);
             run->Shutdown();RequireGameCoreAbsent();
             std::puts("RESTORED_CORE_MODULE_UNLOADED=true\nNATIVE_RESTORE_SHUTDOWN_PASS GAMECORE_LOADED=true RESTORE_VERIFIED=true RESUMED_TURN_VERIFIED=true");

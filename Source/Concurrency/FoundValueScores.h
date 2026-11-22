@@ -167,19 +167,21 @@ inline bool divide_into(std::int32_t& target, std::int32_t value) noexcept {
     return checked_divide(target, value, target);
 }
 
-inline Result evaluate(const Snapshot& input) noexcept {
-    if (input.path != Path::settler_no_yield_no_coast_only)
-        return {Status::unsupported_path, 0};
-    if (!input.valid || !input.has_player || !input.center_present ||
-        input.min_city_range < 0 ||
-        input.major_civ_count < 0 || input.major_civ_count > 64)
-        return {Status::invalid_snapshot, 0};
-    if (!input.capital_present && input.capital_area != 0)
-        return {Status::invalid_snapshot, 0};
+namespace detail {
 
-    const Tile& center = input.tiles[kCenterOffset];
-    if (!center.present || center.distance != 0) return {Status::invalid_snapshot, 0};
-    if (!input.center_can_found_visible || !input.center_can_found_full)
+// Distance and strategic value belong to the slot. The remaining facts can
+// be borrowed even when multiple slots refer to the same plot.
+struct ScoringTile {
+    const Tile* tile;
+    std::int32_t distance;
+    std::int32_t strategic_value;
+};
+
+// Both callers validate the center first. Read candidate flags from site and
+// visit slots in BNW order for either dense or shared storage.
+template<class Site, class TileAt>
+inline Result score_site(const Snapshot& input, const Site& site, TileAt tile_at) noexcept {
+    if (!site.center_can_found_visible || !site.center_can_found_full)
         return {Status::ok, 0};
 
     std::int32_t rtn_value = 0;
@@ -207,17 +209,18 @@ inline Result evaluate(const Snapshot& input) noexcept {
     for (std::int32_t dx = -kRadius; dx <= kRadius; ++dx) {
         for (std::int32_t dy = -kRadius; dy <= kRadius; ++dy) {
             const std::size_t index = static_cast<std::size_t>((dx + kRadius) * kDiameter + dy + kRadius);
-            const Tile& tile = input.tiles[index];
-            if (!tile.present) continue;
-            if (tile.distance < 0) return {Status::invalid_snapshot, 0};
-            if (tile.distance > kRadius) continue;
+            const ScoringTile slot = tile_at(index);
+            if (!slot.tile) continue;
+            const Tile& tile = *slot.tile;
+            const std::int32_t distance = slot.distance;
+            if (distance < 0) return {Status::invalid_snapshot, 0};
+            if (distance > kRadius) continue;
 
             if (tile.owner == OwnerKind::unowned || tile.owner == OwnerKind::player) {
-                if (closest_city_of_mine > tile.distance && tile.city)
-                    closest_city_of_mine = tile.distance;
+                if (closest_city_of_mine > distance && tile.city)
+                    closest_city_of_mine = distance;
 
-                if (tile.distance <= 5) {
-                    const std::int32_t distance = tile.distance;
+                if (distance <= 5) {
                     const std::int32_t ring = input.ring_modifier[static_cast<std::size_t>(distance)];
                     std::int32_t food = 0;
                     std::int32_t production = 0;
@@ -253,7 +256,7 @@ inline Result evaluate(const Snapshot& input) noexcept {
                         if (!multiply_into(resources, tile.resource_value) ||
                             !multiply_into(resources, input.settler_resource_multiplier)) return {Status::overflow, 0};
                         if (distance != 0) {
-                            strategic = tile.strategic_value;
+                            strategic = slot.strategic_value;
                             if (!multiply_into(strategic, input.settler_strategic_multiplier))
                                 return {Status::overflow, 0};
                         }
@@ -309,8 +312,8 @@ inline Result evaluate(const Snapshot& input) noexcept {
                             return {Status::overflow, 0};
                     }
                 }
-            } else if (closest_enemy_city > tile.distance && tile.city && tile.city_owner_is_major) {
-                closest_enemy_city = tile.distance;
+            } else if (closest_enemy_city > distance && tile.city && tile.city_owner_is_major) {
+                closest_enemy_city = distance;
             }
         }
     }
@@ -351,19 +354,19 @@ inline Result evaluate(const Snapshot& input) noexcept {
     }
 
     if (rtn_value < 0) rtn_value = 0;
-    if (input.center_has_resource_for_team) {
+    if (site.center_has_resource_for_team) {
         std::int32_t adjustment = rtn_value;
         if (!multiply_into(adjustment, input.build_on_resource_percent) ||
             !divide_into(adjustment, 100) || !add_to(rtn_value, adjustment))
             return {Status::overflow, 0};
     }
-    if (input.center_is_river) {
+    if (site.center_is_river) {
         std::int32_t adjustment = rtn_value;
         if (!multiply_into(adjustment, input.build_on_river_percent) ||
             !divide_into(adjustment, 100) || !add_to(rtn_value, adjustment))
             return {Status::overflow, 0};
     }
-    if (input.center_is_coastal) {
+    if (site.center_is_coastal) {
         std::int32_t adjustment = rtn_value;
         if (!multiply_into(adjustment, input.build_on_coast_percent) ||
             !divide_into(adjustment, 100) || !add_to(rtn_value, adjustment))
@@ -415,15 +418,35 @@ inline Result evaluate(const Snapshot& input) noexcept {
                    (!multiply_into(rtn_value, 2) || !divide_into(rtn_value, 3)))
             return {Status::overflow, 0};
 
-        if (input.capital_area != input.center_area && closest_city_of_mine < 7 &&
+        if (input.capital_area != site.center_area && closest_city_of_mine < 7 &&
             (!multiply_into(rtn_value, 3) || !divide_into(rtn_value, 2)))
             return {Status::overflow, 0};
     }
 
     if (rtn_value < 0) rtn_value = 0;
-    if (input.center_has_unique_luxury && !multiply_into(rtn_value, 2))
+    if (site.center_has_unique_luxury && !multiply_into(rtn_value, 2))
         return {Status::overflow, 0};
     return {Status::ok, rtn_value};
+}
+
+} // namespace detail
+
+inline Result evaluate(const Snapshot& input) noexcept {
+    if (input.path != Path::settler_no_yield_no_coast_only)
+        return {Status::unsupported_path, 0};
+    if (!input.valid || !input.has_player || !input.center_present ||
+        input.min_city_range < 0 ||
+        input.major_civ_count < 0 || input.major_civ_count > 64)
+        return {Status::invalid_snapshot, 0};
+    if (!input.capital_present && input.capital_area != 0)
+        return {Status::invalid_snapshot, 0};
+    const Tile& center = input.tiles[kCenterOffset];
+    if (!center.present || center.distance != 0) return {Status::invalid_snapshot, 0};
+
+    return detail::score_site(input, input, [&input](std::size_t index) noexcept {
+        const Tile& tile = input.tiles[index];
+        return detail::ScoringTile{tile.present ? &tile : nullptr, tile.distance, tile.strategic_value};
+    });
 }
 
 } // namespace zerosis::found_value

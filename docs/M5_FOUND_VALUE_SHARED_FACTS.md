@@ -1,5 +1,25 @@
 # FoundValue 공유 입력 후보
 
+## 2026-11-21 개척지 점수의 후보별 타일 복사 제거
+
+`ZeroSisFoundValueEvaluateSharedBatch`의 워커는 게임 스레드가 복사·검증한 지도 타일을 직접 읽습니다. 원본처럼 `dx`를 바깥 루프, `dy`를 안쪽 루프로 두고 후보의 225개 슬롯을 방문합니다. 같은 지도 타일을 다시 만나도 해당 슬롯의 거리와 거리별 전략 점수를 사용합니다. 직렬 dense 입력과 공유 입력은 같은 정수 연산을 거칩니다. SDK 호출부는 모든 결과를 원본 직렬 함수와 대조한 뒤 지도 순서대로 적용합니다. [공유 입력 조회](../Source/Concurrency/FoundValueSharedScores.h) · [점수 계산](../Source/Concurrency/FoundValueScores.h) · [SDK 적용 경로](../Source/Concurrency/FoundValueSharedSdkCapture.inc)
+
+기준 커밋 `86ef92a`와 수정본의 실제 공유 브리지를 MSVC 14.44 x64 `/O2`로 컴파일했습니다. 기준 워커는 후보마다 13,656바이트 `Snapshot`을 `memcpy`한 뒤 225개 타일 슬롯을 다시 채웠습니다. 수정본은 이 두 작업을 제거했습니다. 건설 가능한 후보는 점수 순회 한 번으로 처리하고, 건설 불가 후보는 입력 유효성 검사를 마친 뒤 점수 0을 반환합니다. 측정 대상은 워커 내부의 복사량과 순회 횟수입니다. [수정 전 어셈블리](../Build/FoundValueSlotScan/before/bridge.asm) · [수정 후 어셈블리](../Build/FoundValueSlotScan/after/bridge.asm)
+
+| 검증 범위 | 빌드·실행 결과 | 기록 |
+|---|---|---|
+| Civ V SDK 없이 실행한 공유 C ABI | 일반 후보 48개와 경계 후보 4개에서 호출 스레드의 직렬 커널과 워커 1·2·4개의 순서별 정수 점수가 일치했습니다. `/O2`와 `/Od` 각각 84개 검사를 통과했습니다. | [검사](../tools/verify_found_value_shared_bridge.py) · [결과](../evidence/found_value_shared_bridge/20261121T095607Z_5e83bc1ada/conformance.json) |
+| Civ V SDK 없이 실행한 dense C ABI | 기존 입력 형식의 회귀 검사 11개가 `/O2`와 `/Od`에서 각각 통과했습니다. | [검사](../tools/verify_found_value_score_bridge.py) · [결과](../evidence/found_value_score_bridge/20261121T095607Z_2283aabe6d/conformance.json) |
+| Civ V SDK 없이 실행한 수정 전후 커널 | 고정 시드 `0x72a2f11d`의 읽기 전용 후보 512개에서 이전 dense 직렬 점수와 수정 후 직렬·공유 워커 1·2·4개의 점수를 인덱스별로 비교했습니다. 불일치는 0건입니다. | [재현 스크립트](../evidence/found_value_shared_bridge/slot_scan/compare_revision.py) · [전후 비교 기록](../Build/FoundValueSlotScan/comparison.json) |
+| 원본 BNW 함수 본문과의 대조 | 원본·x64 경로의 `CvSiteEvaluationClasses.cpp`가 저장소 명세의 SHA-256과 일치했습니다. 기본·개척자 `PlotFoundValue` 본문을 추출하고 테스트가 공급한 타일 관측값으로 실행했습니다. `/O2`와 `/Od`에서 공유 커널은 각각 530개, dense 커널은 각각 533개 검사를 통과했습니다. | [원본 명세](../patches/sdk-bnw-inputs.json) · [공유 커널 결과](../evidence/found_value_shared_scores/20261121T095913Z_fd82444397/conformance.json) · [dense 커널 결과](../evidence/found_value_scores/20261121T095717Z_8369df0afa/conformance.json) |
+| SDK 캡처 코드의 모의 실행 | 소유 스레드에서 관측값을 수집하고 결과를 순서대로 적용하는 경로가 `/O2`와 `/Od`에서 각각 49개 검사를 통과했습니다. | [캡처 검사 결과](../evidence/found_value_shared_sdk_capture/20261121T100059Z_7e99b93127c0/conformance.json) |
+
+거리 1을 중심보다 먼저 방문한 경계 입력은 50점, 거리 4를 먼저 방문한 입력은 40점입니다. 앞 슬롯에서 계산한 신앙값이 중심과 거리 4·5에 이어지는 원본 동작을 두 함수 본문과 대조했습니다. 공유 브리지에서는 같은 지도 인덱스를 반복 참조한 경우와 호출 전후 입력 바이트도 확인했습니다. 마지막 슬롯의 전략 점수가 오버플로하면 앞 후보까지 포함해 출력 전체가 보존되고, 건설 불가 후보의 잘못된 슬롯은 워커 시작 전에 거부됩니다. [브리지 경계 검사](../Tests/found_value_shared_bridge.cpp) · [원본 함수 대조 사례](../Tests/found_value_shared_scores.cpp)
+
+11월 21일 검증은 구성요소 실행까지였습니다. 11월 22일에는 별도 x64 GameCore와 헤드리스 Host를 연결해 그리스·로마 2→4턴을 측정했습니다. 아래의 2026-10-02 SDK 실행과 CPU 추적은 당시 커널에 대한 기록이며, 해당 후보 빌더는 당시 두 커널의 SHA-256을 고정합니다. [전체 턴 실측과 재현 조건](M5_FULL_TURN_BENCHMARK.md)
+
+## 2026-10-02 공유 입력 SDK 후보
+
 기존 FoundValue 후보에서 후보마다 225개 타일의 관측값을 복사하던 경로를, 호출마다 한 번 수집한 공통 설정과 지도 타일 관측값 및 후보별 인덱스·거리 배열로 바꿨사와요. 별도 후보를 사용하며 기존 dense 후보와 활성 SDK·Stage·MODS는 보존했답니다.
 
 ## 구현과 저장 경계
