@@ -137,6 +137,20 @@ def turn_row(part, begin, prefix=PREFIX):
                 promotion_actions=re.findall(r'^' + prefix + r'(?:ACTION|PROMOTION|INPUT_ROUTE)=[^\n]+', part, re.M)), duration
 
 
+def extended_turn_blocks(output, stop):
+    """Yield the start turn, its full Host record and its log window before BENCH_END."""
+    require(one(output, 'EXTENDED_TURNS_BEGIN') == f'2,{stop-2}' and
+            one(output, 'EXTENDED_TURNS_COMPLETE') == f'2,{stop},{stop-2}', 'Wrong extended turn range')
+    block = re.search(r'^EXTENDED_TURNS_BEGIN=[^\n]*\n(.*?)^EXTENDED_TURNS_COMPLETE=', output, re.M | re.S)
+    require(block is not None, 'Reordered extended turn range markers')
+    parts = re.split(r'(?=^' + PREFIX + 'BENCH_BEGIN=)', block[1], flags=re.M)[1:]
+    require(len(parts) == stop - 2, 'Missing per-turn benchmark markers in Host')
+    for begin, part in enumerate(parts, 2):
+        inside, end_marker, _ = part.partition('\n' + PREFIX + 'BENCH_END=')
+        require(end_marker, 'Missing end of measured Host turn')
+        yield begin, part, inside
+
+
 def inspect_run(output, bundle, start, stop, mode, diagnostic, human):
     require(output.splitlines().count(SHUTDOWN) == 1 and one(output, 'RESTORED_CORE_MODULE_UNLOADED') == 'true' and
             one(output, 'NATIVE_RESTORE_FRESH_SESSION') == 'true', 'Actual GameCore restore/shutdown did not complete')
@@ -151,8 +165,6 @@ def inspect_run(output, bundle, start, stop, mode, diagnostic, human):
             require(len(rows) == 1, 'Ambiguous fixture leader for ' + civilization)
             wanted.extend(rows[0])
     require(majors == wanted, 'Actual SDK major players differ from requested fixture')
-    require(one(output, 'EXTENDED_TURNS_BEGIN') == f'2,{stop-2}' and
-            one(output, 'EXTENDED_TURNS_COMPLETE') == f'2,{stop},{stop-2}', 'Wrong extended turn range')
     restored = Path(one(output, 'RESTORE_SESSION_DIRECTORY')).resolve(strict=True)
     initial = Path(one(output, 'SESSION_DIRECTORY')).resolve(strict=True)
     require(initial != restored and initial.parent == restored.parent == (bundle/'sessions').resolve(),
@@ -164,12 +176,8 @@ def inspect_run(output, bundle, start, stop, mode, diagnostic, human):
     initial_state = snapshot((initial/'state-before-save.txt').read_bytes(), 1, original_fixture)
     require(snapshot((restored/'state-after-restore.txt').read_bytes(), 1, original_fixture) == initial_state,
             'Fresh restore changed the starting SDK state')
-    block = output.split('EXTENDED_TURNS_BEGIN=', 1)[1].split('EXTENDED_TURNS_COMPLETE=', 1)[0]
-    parts = block.split(PREFIX + 'BENCH_BEGIN=')[1:]
-    require(len(parts) == stop - 2, 'Missing per-turn benchmark markers in Host')
     states, times, observed_jobs = [], {}, []
-    for begin, part in enumerate(parts, 2):
-        part = PREFIX + 'BENCH_BEGIN=' + part
+    for begin, part, inside in extended_turn_blocks(output, stop):
         state, duration = turn_row(part, begin)
         snap = (restored / f'extended-state-turn-{begin+1}.txt').read_bytes()
         require(one(part, 'EXTENDED_TURN_SNAPSHOT') == f'{begin+1},{len(snap)}', 'Wrong SDK snapshot or size')
@@ -177,7 +185,6 @@ def inspect_run(output, bundle, start, stop, mode, diagnostic, human):
         states.append(state)
         if begin >= start:
             times[begin] = duration
-            inside = part.split(PREFIX + 'BENCH_END=', 1)[0]
             observed_jobs.extend(int(n) for n in re.findall(r'^ZEROSIS_FOUND_VALUE_TRACE [^\n]*\bjobs_completed=(\d+)\b', inside, re.M))
     archive = inspect_save(restored / 'state-after-extended-turns.zssave', bundle / 'bundle.manifest',
                            restored / 'Civ5SavedGameDatabase.db', (1, 0, stop, stop, 0, 64, 64, 133))

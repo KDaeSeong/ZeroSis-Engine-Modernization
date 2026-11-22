@@ -80,6 +80,7 @@ void DrawDynamicShadow(const WorldView& view,Cache& cache,const OriginalGroundDa
     cache.context->SOSetTargets(0,nullptr,nullptr);cache.context->SetPredication(nullptr,FALSE);
     ID3D11Buffer* cb=shadow.constants.Get();cache.context->VSSetConstantBuffers(5,1,&cb);cache.context->PSSetConstantBuffers(5,1,&cb);
     auto domain=Tess::WorldDomainConstants(shadow.projection.matrix);
+    const auto gridLevel=ground.lod.GridLevel();
     cache.context->PSSetShader(shadow.groundPs.Get(),nullptr,0);
     ID3D11ShaderResourceView* state=ground.plotState.Get();cache.context->PSSetShaderResources(0,1,&state);
     for(const auto& draw:ground.draws){if(!draw.mesh->slots.count)continue;
@@ -87,7 +88,7 @@ void DrawDynamicShadow(const WorldView& view,Cache& cache,const OriginalGroundDa
         params.placement[0]=origin[0];params.placement[1]=origin[1];
         params.placement[2]=static_cast<float>(draw.column);params.placement[3]=static_cast<float>(draw.row);
         cache.context->UpdateSubresource(shadow.constants.Get(),0,nullptr,&params,0,0);
-        DrawPlacedTerrainMesh(cache,draw,domain);}
+        DrawPlacedTerrainMesh(cache,draw,gridLevel,domain);}
     cache.context->PSSetShaderResources(0,1,&empty);cache.context->PSSetShader(nullptr,nullptr,0);
     cache.context->VSSetShader(shadow.unitVs.Get(),nullptr,0);cache.context->IASetInputLayout(shadow.unitLayout.Get());
     // Uses only the current already-filtered pose and uploaded buffers. No

@@ -6,6 +6,7 @@
 #include "OriginalTerrainVertexPreparation.h"
 #include "OriginalTerrainShader.h"
 #include "OriginalTerrainTessellationShader.h"
+#include "OriginalTerrainLod.h"
 #include "OriginalFogBinding.h"
 #include "OriginalFogModel.h"
 #include "OriginalFogState.h"
@@ -626,12 +627,18 @@ bool RenderWorldTerrainImpl(const WorldView& view,std::uint32_t width,std::uint3
             candidate->metadata.centers=result.centers;
             candidate->metadata.projectedPlots=result.projectedPlots;
             candidate->metadata.triangles=result.triangles;
+            candidate->metadata.bicubicPatches=result.bicubicPatches;
+            candidate->metadata.terrainGridLevel=result.terrainGridLevel;
         }
         if(callerTarget)cache.context->CopyResource(callerTarget,finalColour);
         if(candidate){
             auto surface=candidate->original?candidate->original->surface:std::shared_ptr<OriginalSurface>();
+            const auto lod=candidate->original?candidate->original->lod:OT::Lod::History{};
             cache.ground.Publish(std::move(*candidateKey),std::move(candidate));
-            if(surface)cache.original->surface=std::move(surface);
+            if(surface){
+                surface->lastLod=lod;
+                cache.original->surface=std::move(surface);
+            }
         }
         // All potentially failing frame work precedes these no-throw owner swaps.
         if(maskCandidate)activeFog->mask=std::move(maskCandidate);

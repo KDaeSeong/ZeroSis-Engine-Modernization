@@ -3,6 +3,7 @@
 #include "OriginalTerrainPatchPlacement.h"
 
 namespace ZeroSisPresentation { namespace OriginalTerrainTessellation {
+constexpr unsigned WorldEdgeSegments=1; // The domain boundary meets a triangle rim with one segment per edge.
 // The original 160-byte b7 prefix and explicitly supplied basis stay usable
 // for a single patch. Batched world draws append the grid and its exact span.
 struct alignas(16) DomainConstants {
@@ -29,7 +30,7 @@ inline DomainConstants WorldDomainConstants(const std::array<float,16>& displayV
         result.domainViewProjection[i]*=perTexel;
         result.domainViewProjection[8+i]*=-OriginalTerrain::RowSpacing*perTexel;
     }
-    result.domainPolicy={{1,1,0,0}};
+    result.domainPolicy={{static_cast<float>(WorldEdgeSegments),1,0,0}};
     return result;
 }
 

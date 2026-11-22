@@ -1,4 +1,5 @@
 #include "OriginalTerrainGeometry.h"
+#include "OriginalTerrainLod.h"
 #include "OriginalTerrainTessellationShader.h"
 #include "WorldTerrainRenderer.h"
 #include <d3d11.h>
@@ -19,6 +20,7 @@ using Microsoft::WRL::ComPtr;
 using namespace ZeroSisPresentation;
 namespace T=OriginalTerrainTessellation;
 namespace W=OriginalTerrain::PatchWorld;
+namespace L=OriginalTerrain::Lod;
 
 namespace {
 void Check(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
@@ -211,18 +213,87 @@ struct V{float4 p:SV_POSITION;float2 uv:TEXCOORD0;float h:TEXCOORD1;};
     }
 };
 
-void WorldPass(Warp& warp,const wchar_t* package,const wchar_t* water,const wchar_t* waterSurface){
+void CheckLod(){
+    // For an orthographic view each opposite-corner pair has the same NDC length.
+    std::array<float,16> vp={{1,0,0,0, 0,0,.125f,0, 0,1,0,0, -.5f,.4f,.5f,1}};
+    const W::Placement cell={{{0,0,1,1}},{{64,64,64,64}}};
+    Near(L::ProjectedFootprint(cell,vp,320,-1,1),80*std::sqrt(1.75));
+    vp[3]=.5f; // w = 1 + x/2; the two screen-space diagonals have different lengths.
+    Near(L::ProjectedFootprint(cell,vp,320,-1,1),80*std::hypot(5.0/6,std::sqrt(3.0)/2-2.0/15));
+    vp[3]=0;
+    vp[12]=5;
+    Near(L::ProjectedFootprint(cell,vp,320,-1,1),0);
+    vp[12]=0;vp[14]=0;
+    Check(std::isinf(L::ProjectedFootprint(cell,vp,320,-1,1)),"Near-plane crossing selected a coarse grid");
+    Near(L::RequestedLevel(0,64,4,2),4);
+    Near(L::RequestedLevel(256,64,4,2),2.5);
+    Near(L::RequestedLevel(1024,64,4,2),0.5);
+    Near(L::RequestedLevel(4096,64,4,2),-1.5);
+    Near(L::RequestedLevel((std::numeric_limits<double>::infinity)(),64,4,2),-2);
+    const auto coarse=L::History{}.Update(2.125f);
+    Near(coarse.band,.5);Near(coarse.Update(1.625f).accepted,2.125);
+    const auto fine=coarse.Update(1.5f);
+    Near(fine.band,-.25);Near(fine.Update(1.75f).accepted,1.5);Near(fine.Update(1.875f).accepted,1.875);
+    Check(fine.Update(-1.25f).GridLevel()==0,"Negative levels may not coarsen the grid");
+
+    const unsigned expectedTriangles[]={8192,2176,704,352,272};
+    for(unsigned level=0;level<5;++level){
+        const unsigned step=1u<<level,inner=64/step-2;
+        const auto patch=W::Interior(cell,level);
+        Check(patch.grid==std::array<std::uint32_t,4>{{inner,inner,inner*step,inner*step}},"Coarse world span");
+        Near(patch.originSpacing[0],step);Near(patch.originSpacing[2],step);
+        const auto geometry=L::BuildGridIndices(level);
+        Check(geometry.controls.size()==inner*inner*16 && geometry.rim.size()/3+inner*inner*2==expectedTriangles[level],
+            "Wrong number of coarse terrain primitives");
+        std::map<std::pair<unsigned,unsigned>,std::pair<int,int>> edges;
+        int doubledArea=0;
+        const auto triangle=[&](unsigned a,unsigned b,unsigned c){
+            const auto ix=[](unsigned n){return static_cast<int>(n%65);};
+            const auto iy=[](unsigned n){return static_cast<int>(n/65);};
+            const int area=(ix(b)-ix(a))*(iy(c)-iy(a))-(iy(b)-iy(a))*(ix(c)-ix(a));
+            Check(a<65*65 && b<65*65 && c<65*65 && area>0,"Degenerate, reversed or out-of-range terrain triangle");
+            doubledArea+=area;
+            for(const auto& edge:{std::make_pair(a,b),std::make_pair(b,c),std::make_pair(c,a)}){
+                auto& use=edges[std::minmax(edge.first,edge.second)];
+                ++use.first;use.second+=edge.first<edge.second?1:-1;
+            }
+        };
+        for(std::size_t i=0;i<geometry.rim.size();i+=3)triangle(geometry.rim[i],geometry.rim[i+1],geometry.rim[i+2]);
+        for(unsigned q=0;q<inner*inner;++q){
+            const auto* cp=geometry.controls.data()+16*q;
+            for(unsigned i=0;i<16;++i){
+                const unsigned x=(q%inner+i%4)*step,y=(q/inner+i/4)*step;
+                Check(cp[i]==y*65+x,"Wrong coarse control or patch order");
+            }
+            triangle(cp[5],cp[6],cp[9]);triangle(cp[6],cp[10],cp[9]);
+        }
+        unsigned border=0;
+        for(const auto& e:edges){
+            const unsigned a=e.first.first,b=e.first.second;
+            const bool horizontal=(a/65==0 || a/65==64) && a/65==b/65 && b==a+1;
+            const bool vertical=(a%65==0 || a%65==64) && a%65==b%65 && b==a+65;
+            if(horizontal || vertical){Check(e.second.first==1,"Duplicated external edge");++border;}
+            else Check(e.second.first==2 && e.second.second==0,"Unmatched terrain edge or T-junction");
+        }
+        Check(border==256 && doubledArea==8192,"Missing unit-spaced boundary or uncovered surface");
+    }
+}
+
+std::array<unsigned,2> WorldPass(Warp& warp,const wchar_t* package,const wchar_t* water,const wchar_t* waterSurface){
     constexpr UINT width=256,height=192;
     WorldView view{};view.gridWidth=5;view.gridHeight=4;view.wrapX=true;view.wrapY=false;
     view.cameraX=0;view.cameraY=1;view.tileWidth=48;view.terrainAssetsPath=package;view.mapRandomSeed=71;
     for(int y=0;y<view.gridHeight;++y)for(int x=0;x<view.gridWidth;++x){
         WorldViewPlot p{};p.index=y*view.gridWidth+x;p.x=x;p.y=y;p.terrain="TERRAIN_GRASS";p.terrainId=0;p.continent=1;
+        p.hills=(x==0 && y==1) || (x==4 && y==2);
+        p.mountain=x==3 && y==1;
         p.revealed=p.visible=true;view.plots.push_back(p);
     }
     D3D11_TEXTURE2D_DESC desc{};desc.Width=width;desc.Height=height;desc.Format=DXGI_FORMAT_B8G8R8A8_UNORM;
     desc.ArraySize=desc.MipLevels=desc.SampleDesc.Count=1;desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
     ComPtr<ID3D11Texture2D> target;Ok(warp.device->CreateTexture2D(&desc,nullptr,&target),"Create offscreen world texture");
     bool expectCurves=true,expectShadow=false;
+    unsigned observedLevel=0;
     const auto draw=[&](){
         TerrainFrame frame;std::wstring errors;
         D3D11_QUERY_DESC qd{D3D11_QUERY_PIPELINE_STATISTICS,0};ComPtr<ID3D11Query> stats;
@@ -238,12 +309,16 @@ void WorldPass(Warp& warp,const wchar_t* package,const wchar_t* water,const wcha
         while((ready=warp.context->GetData(stats.Get(),&counts,sizeof(counts),0))==S_FALSE && GetTickCount64()<deadline)Sleep(1);
         Check(ready==S_OK && (counts.DSInvocations!=0)==expectCurves && (counts.HSInvocations!=0)==expectCurves,
             "Unexpected tessellation stages in the published world draw");
-        if(expectShadow){
-            // One color/ID pass can submit at most four domain vertices per
-            // interior quad at factor one. The terrain depth caster also ran.
-            const auto singlePassBound=frame.triangles/8192u*4u*W::InteriorSide*W::InteriorSide;
-            Check(counts.DSInvocations>singlePassBound,"Expected another terrain submission in the shadow pass");
+        // The HS counter measures submitted patches directly. DS corner reuse
+        // between the two triangles of a patch is implementation dependent.
+        const auto expected=frame.bicubicPatches*(expectShadow?2:1);
+        if(counts.HSInvocations!=expected || counts.DSInvocations<4*expected){
+            std::fprintf(stderr,"World grid %u, patches %llu, shadow %d, observed HS %llu DS %llu, expected HS %llu\n",
+                frame.terrainGridLevel,static_cast<unsigned long long>(frame.bicubicPatches),expectShadow?1:0,
+                counts.HSInvocations,counts.DSInvocations,static_cast<unsigned long long>(expected));
+            throw std::runtime_error("World and shadow patch counts differ");
         }
+        observedLevel=frame.terrainGridLevel;
         Check(!frame.hardware && frame.triangles>0 && frame.picking.indices.size()==width*height,"World draw output");
         const int index=view.cameraY*view.gridWidth+view.cameraX;
         const auto center=frame.centers.at(index);
@@ -256,29 +331,35 @@ void WorldPass(Warp& warp,const wchar_t* package,const wchar_t* water,const wcha
     const auto first=draw();Check(draw()==first,"Cached placement changed plot selection");
     view.cameraX=4;view.cameraY=2;Check(draw()!=first,"Camera or wrap change reused the old placement");
     view.cameraX=0;view.cameraY=1;Check(draw()==first,"Returning camera did not restore the world");
+    view.tileWidth=WorldCameraZoom::Minimum;draw();const unsigned farLevel=observedLevel;
+    view.tileWidth=WorldCameraZoom::Maximum;draw();const unsigned nearLevel=observedLevel;
+    if(farLevel<=nearLevel)std::fprintf(stderr,"Far grid %u, near grid %u\n",farLevel,nearLevel);
+    Check(farLevel>nearLevel,"Zoom did not select a coarser distance grid");
+    view.tileWidth=48;draw();
     for(auto& plot:view.plots)plot.visible=plot.revealed=plot.x==view.cameraX && plot.y==view.cameraY;
     expectCurves=false;const auto fog=draw();
     Check(std::count(fog.begin(),fog.end(),0u)>0,"Unexplored plots received a selection ID");
     for(auto& plot:view.plots){
         plot.revealed=plot.visible=true;
-        if(plot.y>=2){plot.water=true;plot.terrain="TERRAIN_COAST";plot.terrainId=5;}
+        if(plot.y>=2){plot.water=true;plot.hills=false;plot.terrain="TERRAIN_COAST";plot.terrainId=5;}
     }
     view.wrapY=true;view.waterAssetsPath=water;view.waterSurfaceAssetsPath=waterSurface;
     expectCurves=expectShadow=true;draw();
     ReleaseWorldTerrainResources();
+    return {{nearLevel,farLevel}};
 }
 }
 int wmain(int argc,wchar_t** argv){
     try{
-        Check(argc==4,"Pass the V2 terrain, water and water surface packages");CpuLayout();Warp warp;
+        Check(argc==4,"Pass the V2 terrain, water and water surface packages");CpuLayout();CheckLod();Warp warp;
         const W::Frame frame{134,90,-27,-16.0*static_cast<double>(0.866f)};
         unsigned vertices=warp.CheckPatchDraw(W::Place(frame,2,1,-1,-1,1),-45,-54,5,25);
         vertices+=warp.CheckPatchDraw(W::Place(frame,0,0,0,0,3),-40,-29,64,64);
         vertices+=warp.CheckPatchDraw(W::Place(frame,2,1,2,1,2),88,35,5,25);
         const unsigned surfaceVertices=warp.CheckPatchDraw(W::Place(frame,2,1,-1,-1,1),-45,-54,5,25,true);
-        WorldPass(warp,argv[1],argv[2],argv[3]);
-        std::printf("PASS_TERRAIN_PATCH_WORLD clipped_axis_cases=320 warp_vertices=%u world_surface_vertices=%u world_frames=6 world_hs_ds_observed=1 shadow_draw_observed=1 native_game=0\n",
-            vertices,surfaceVertices);
+        const auto levels=WorldPass(warp,argv[1],argv[2],argv[3]);
+        std::printf("PASS_TERRAIN_PATCH_WORLD clipped_axis_cases=320 warp_vertices=%u world_surface_vertices=%u world_frames=9 lod_meshes=5 near_grid=%u far_grid=%u world_hs_ds_observed=1 shadow_draw_observed=1 native_game=0\n",
+            vertices,surfaceVertices,levels[0],levels[1]);
         return 0;
     }catch(const std::exception& e){
         std::fprintf(stderr,"FAIL_TERRAIN_PATCH_WORLD %s\n",e.what());return 1;

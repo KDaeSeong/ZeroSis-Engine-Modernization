@@ -56,18 +56,19 @@ std::unique_ptr<OriginalCatalog> LoadOriginalCatalog(ID3D11Device* device,std::v
         D3D11_SUBRESOURCE_DATA initial{values.data(),0,0};Check(device->CreateBuffer(&bd,&initial,&target),"Original terrain grid indices");
     };
     std::vector<std::uint16_t> indices;indices.reserve(64*64*6);
-    std::vector<std::uint16_t> rim,interior;
-    rim.reserve(OT::PatchWorld::RimIndices);interior.reserve(OT::PatchWorld::InteriorIndices);
     for(unsigned y=0;y<64;++y)for(unsigned x=0;x<64;++x){
         const auto a=static_cast<std::uint16_t>(y*65+x),b=static_cast<std::uint16_t>(a+1);
         const auto c=static_cast<std::uint16_t>(a+65),d=static_cast<std::uint16_t>(c+1);
         indices.insert(indices.end(),{a,b,c,b,d,c});
-        if(x==0 || x==63 || y==0 || y==63)rim.insert(rim.end(),{a,b,c,b,d,c});
-        else for(unsigned dy=0;dy<4;++dy)for(unsigned dx=0;dx<4;++dx)
-            interior.push_back(static_cast<std::uint16_t>((y-1+dy)*65+x-1+dx));
     }
     indexBuffer(indices,result->indices);indexBuffer({0,1,2,1,3,2},result->quadIndices);
-    indexBuffer(rim,result->rimIndices);indexBuffer(interior,result->interiorIndices);
+    for(unsigned i=0;i<result->levels.size();++i){
+        const auto grid=OT::Lod::BuildGridIndices(i);
+        auto& level=result->levels[i];
+        indexBuffer(grid.rim,level.rim);indexBuffer(grid.controls,level.controls);
+        level.rimCount=static_cast<unsigned>(grid.rim.size());
+        level.controlCount=static_cast<unsigned>(grid.controls.size());
+    }
     return result;
 }
 
@@ -99,11 +100,24 @@ std::shared_ptr<OriginalGpuMesh> OriginalMesh(Cache& cache,OriginalSurface& surf
     surface.meshes[index]=result;return result;
 }
 
+std::array<float,16> TerrainViewProjection(const XMMATRIX& viewProjection){
+    XMFLOAT4X4 matrix;XMStoreFloat4x4(&matrix,viewProjection);
+    std::array<float,16> projection;
+    static_assert(sizeof(matrix)==sizeof(projection),"Unexpected terrain view matrix layout");
+    std::memcpy(projection.data(),&matrix,sizeof(matrix));
+    return projection;
+}
+
 void PrepareOriginalGround(const WorldView& view,Cache& cache,const XMMATRIX& camera,const XMMATRIX& matrix,
     unsigned width,unsigned height,unsigned mapWidth,GroundData& candidate,TerrainFrame& frame){
     candidate.original=std::make_unique<OriginalGroundData>();auto& ground=*candidate.original;
     ground.surface=PrepareOriginalSurface(view,*cache.original);
     const auto patchFrame=OT::PatchFrameForCamera(ground.surface->atlas,view.cameraX,view.cameraY);
+    const auto vp=TerrainViewProjection(matrix);
+    const float low=-OT::HeightOffsetCandidate*OT::HeightWorldScaleCandidate;
+    const float high=(1-OT::HeightOffsetCandidate)*OT::HeightWorldScaleCandidate;
+    double largestFootprint=0;
+    std::uint64_t fullResolutionTriangles=0;
     const float centerX=static_cast<float>(view.cameraX)+static_cast<float>(view.cameraY&1)*0.5f;
     const float centerZ=-static_cast<float>(view.cameraY)*OT::RowSpacing;
     std::vector<std::array<std::uint32_t,2>> states(static_cast<std::size_t>(view.gridWidth)*view.gridHeight);
@@ -149,24 +163,38 @@ void PrepareOriginalGround(const WorldView& view,Cache& cache,const XMMATRIX& ca
         }
         const auto x=static_cast<unsigned>(OT::WrappedCoordinate(column,view.gridWidth));
         const auto y=static_cast<unsigned>(OT::WrappedCoordinate(row,view.gridHeight));
-        auto mesh=OriginalMesh(cache,*ground.surface,x,y);frame.triangles+=mesh->dense?8192u:2u;
-        Require(frame.triangles<=24000000,"Original visible heightfield exceeds its controlled mesh bound");
-        ground.draws.push_back({std::move(mesh),column,row,OT::PatchWorld::Place(patchFrame,x,y,column,row,0)});
+        auto mesh=OriginalMesh(cache,*ground.surface,x,y);
+        // Every grid level shares the same full-resolution vertex allocation.
+        fullResolutionTriangles+=mesh->dense?8192u:2u;
+        Require(fullResolutionTriangles<=24000000,"Original visible heightfield exceeds its controlled mesh bound");
+        const auto patch=OT::PatchWorld::Place(patchFrame,x,y,column,row,0);
+        if(mesh->bicubicInterior)
+            largestFootprint=(std::max)(largestFootprint,OT::Lod::ProjectedFootprint(patch,vp,mapWidth,low,high));
+        ground.draws.push_back({std::move(mesh),column,row,patch});
+    }
+    ground.lod=ground.surface->lastLod;
+    if(largestFootprint>0){
+        // The V2 hull emits one segment per edge. Four pixels is the target
+        // edge length recorded in the local DX11 terrain settings.
+        constexpr unsigned targetEdgePixels=4;
+        const auto requested=OT::Lod::RequestedLevel(largestFootprint,OT::PatchWorld::CellIntervals,targetEdgePixels,Tess::WorldEdgeSegments);
+        ground.lod=ground.lod.Update(requested);
+    }
+    frame.terrainGridLevel=ground.lod.GridLevel();
+    const auto& level=cache.original->levels[frame.terrainGridLevel];
+    for(const auto& draw:ground.draws){
+        if(draw.mesh->bicubicInterior){
+            const unsigned patches=level.controlCount/16;
+            frame.bicubicPatches+=patches;
+            frame.triangles+=level.rimCount/3+2*patches;
+        }else frame.triangles+=draw.mesh->dense?8192u:2u;
     }
     (void)width;
 }
 
-Tess::DomainConstants TerrainDomainForView(const XMMATRIX& viewProjection){
-    XMFLOAT4X4 matrix;XMStoreFloat4x4(&matrix,viewProjection);
-    std::array<float,16> projection;
-    static_assert(sizeof(matrix)==sizeof(projection),"Unexpected terrain view matrix layout");
-    std::memcpy(projection.data(),&matrix,sizeof(matrix));
-    return Tess::WorldDomainConstants(projection);
-}
-
 // Color, integer plot IDs and the terrain shadow caster all submit the same
 // world-space vertices. Control heights stay in the existing mesh buffer.
-void DrawPlacedTerrainMesh(Cache& cache,const OriginalDraw& draw,Tess::DomainConstants& domain){
+void DrawPlacedTerrainMesh(Cache& cache,const OriginalDraw& draw,unsigned gridLevel,Tess::DomainConstants& domain){
     auto& catalog=*cache.original;auto* context=cache.context.Get();const auto& mesh=*draw.mesh;
     ID3D11Buffer* cb=catalog.patchConstants.Get();
     domain.SetPlacement(draw.patch);context->UpdateSubresource(cb,0,nullptr,&domain,0,0);
@@ -178,15 +206,16 @@ void DrawPlacedTerrainMesh(Cache& cache,const OriginalDraw& draw,Tess::DomainCon
         context->IASetIndexBuffer(mesh.dense?catalog.indices.Get():catalog.quadIndices.Get(),DXGI_FORMAT_R16_UINT,0);
         context->DrawIndexed(mesh.dense?64*64*6:6,0,0);return;
     }
-    context->IASetIndexBuffer(catalog.rimIndices.Get(),DXGI_FORMAT_R16_UINT,0);
-    context->DrawIndexed(OT::PatchWorld::RimIndices,0,0);
-    domain.SetPlacement(OT::PatchWorld::Interior(draw.patch));context->UpdateSubresource(cb,0,nullptr,&domain,0,0);
+    const auto& level=catalog.levels[gridLevel];
+    context->IASetIndexBuffer(level.rim.Get(),DXGI_FORMAT_R16_UINT,0);
+    context->DrawIndexed(level.rimCount,0,0);
+    domain.SetPlacement(OT::PatchWorld::Interior(draw.patch,gridLevel));context->UpdateSubresource(cb,0,nullptr,&domain,0,0);
     context->HSSetConstantBuffers(7,1,&cb);context->DSSetConstantBuffers(7,1,&cb);
     context->VSSetShader(catalog.controlVs.Get(),nullptr,0);context->HSSetShader(catalog.hs.Get(),nullptr,0);
     context->DSSetShader(catalog.ds.Get(),nullptr,0);
-    context->IASetIndexBuffer(catalog.interiorIndices.Get(),DXGI_FORMAT_R16_UINT,0);
+    context->IASetIndexBuffer(level.controls.Get(),DXGI_FORMAT_R16_UINT,0);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_16_CONTROL_POINT_PATCHLIST);
-    context->DrawIndexed(OT::PatchWorld::InteriorIndices,0,0);
+    context->DrawIndexed(level.controlCount,0,0);
     context->HSSetShader(nullptr,nullptr,0);context->DSSetShader(nullptr,nullptr,0);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 }
@@ -196,7 +225,8 @@ void DrawOriginalGround(const WorldView& view,Cache& cache,const OriginalGroundD
     auto& catalog=*cache.original;
     cache.context->IASetInputLayout(catalog.layout.Get());cache.context->VSSetShader(catalog.vs.Get(),nullptr,0);cache.context->PSSetShader(catalog.ps.Get(),nullptr,0);
     ID3D11Buffer* cb=catalog.constants.Get();cache.context->VSSetConstantBuffers(1,1,&cb);cache.context->PSSetConstantBuffers(1,1,&cb);
-    auto domain=TerrainDomainForView(viewProjection);
+    auto domain=Tess::WorldDomainConstants(TerrainViewProjection(viewProjection));
+    const auto gridLevel=ground.lod.GridLevel();
     if(lighting){
         OriginalLightingConstants parameters{};
         parameters.info[0]=1;parameters.info[2]=1;
@@ -241,7 +271,7 @@ void DrawOriginalGround(const WorldView& view,Cache& cache,const OriginalGroundD
         constants.fogInfo[3]=OriginalTerrainCacheSampling::SourceMetricYDefault;
         cache.context->UpdateSubresource(catalog.constants.Get(),0,nullptr,&constants,0,0);
         cache.context->PSSetShaderResources(0,static_cast<UINT>(resources.size()),resources.data());
-        DrawPlacedTerrainMesh(cache,draw,domain);
+        DrawPlacedTerrainMesh(cache,draw,gridLevel,domain);
     }
     std::array<ID3D11ShaderResourceView*,45> clear{};cache.context->PSSetShaderResources(0,static_cast<UINT>(clear.size()),clear.data());
     if(lighting)UnbindScreenLighting(cache.context.Get());

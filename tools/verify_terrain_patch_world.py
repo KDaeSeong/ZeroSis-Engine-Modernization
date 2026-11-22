@@ -66,7 +66,7 @@ def main():
             modes.append({"mode": mode, "result": output})
     tracked_inputs = [*SOURCES, Path(__file__).resolve(), EVIDENCE / "verify_retail_patch_layout.py"]
     tracked_inputs.extend(PRESENTATION / name for name in (
-        "OriginalTerrainGeometry.h", "OriginalTerrainPatchPlacement.h", "OriginalTerrainTessellationModel.h",
+        "OriginalTerrainGeometry.h", "OriginalTerrainPatchPlacement.h", "OriginalTerrainLod.h", "WorldTerrainRenderer.h", "OriginalTerrainTessellationModel.h",
         "OriginalTerrainTessellationShader.h", "OriginalTerrainGpu.inc", "OriginalTerrainGpuTypes.inc",
         "OriginalDynamicShadowGpu.inc", "OriginalDynamicShadowGpuTypes.inc", "OriginalDynamicShadowShader.h"))
     stamp = datetime.now(timezone.utc)

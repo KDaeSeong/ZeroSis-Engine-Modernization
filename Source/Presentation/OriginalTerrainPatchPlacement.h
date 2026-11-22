@@ -15,9 +15,6 @@ constexpr float RowSpacing=0.866025404f;
 namespace PatchWorld {
 constexpr unsigned CellIntervals=64;
 constexpr unsigned MaxLevel=4;
-constexpr unsigned InteriorSide=CellIntervals-2;
-constexpr unsigned InteriorIndices=16*InteriorSide*InteriorSide;
-constexpr unsigned RimIndices=6*(CellIntervals*CellIntervals-InteriorSide*InteriorSide);
 
 struct Axis {
     unsigned firstTexel;
@@ -80,16 +77,17 @@ inline std::array<float,2> DisplayOrigin(const Placement& where) noexcept {
     constexpr float step=1.0f/OriginalTerrainCacheSampling::SourceTexelsPerHex;
     return {{where.originSpacing[0]*step,where.originSpacing[1]*(-RowSpacing*step)}};
 }
-// The existing 65x65 vertex buffer contains every 4x4 control footprint for
-// interior cells. The outermost one-texel ring uses the same indexed mesh as
-// adjacent chunks and as chunks that have partially unexplored data.
-inline Placement Interior(const Placement& full){
-    if(full.grid!=std::array<std::uint32_t,4>{{CellIntervals,CellIntervals,CellIntervals,CellIntervals}})
-        throw std::invalid_argument("Expected a full-resolution interior patch grid");
+// One coarse quad on each side is reserved for the join to the original
+// unit-spaced chunk boundary. All controls still address the same 65x65 mesh.
+inline Placement Interior(const Placement& full,unsigned level=0){
+    if(level>MaxLevel || full.grid!=std::array<std::uint32_t,4>{{CellIntervals,CellIntervals,CellIntervals,CellIntervals}})
+        throw std::invalid_argument("Invalid terrain interior grid");
+    const unsigned step=1u<<level,side=CellIntervals/step-2;
     Placement result=full;
-    result.originSpacing[0]+=full.originSpacing[2];
-    result.originSpacing[1]+=full.originSpacing[3];
-    result.grid={{InteriorSide,InteriorSide,InteriorSide,InteriorSide}};
+    result.originSpacing[0]+=step;
+    result.originSpacing[1]+=step;
+    result.originSpacing[2]=result.originSpacing[3]=static_cast<float>(step);
+    result.grid={{side,side,side*step,side*step}};
     return result;
 }
 }}}
