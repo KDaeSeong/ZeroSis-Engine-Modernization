@@ -4,6 +4,7 @@
 #include "LocalTurnController.h"
 #include "LocalSdkSession.h"
 #include "FixturePromotionInput.h"
+#include "TurnBenchmarkObservation.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -81,6 +82,16 @@ public:
     }
     static void AdvanceOneTurn(ICvGame1& game,ICvPlayer1& local,HostState& host,const char* prefix="TURN_CYCLE",int expectedUnitCount=2,bool fixturePromotions=false,bool fixtureUnitActions=false){
         if(expectedUnitCount < -1)throw std::invalid_argument("Invalid expected fixture unit count");
+        const bool benchmark=TurnBenchmarkObservation::Enabled();
+        std::string nativeOrder;
+        if(benchmark){
+            int unitCount=0;
+            nativeOrder=TurnBenchmarkObservation::UnitOrder(local,unitCount);
+            if(expectedUnitCount>=0 && !std::getenv("ZEROSIS_BENCHMARK_HUMAN") && expectedUnitCount!=unitCount)
+                throw std::runtime_error("Original fixture starting unit count differs");
+            expectedUnitCount=unitCount;
+            std::printf("%s_BENCH_BEGIN=%d|%lu\n",prefix,game.GetGameTurn(),TurnBenchmarkObservation::SyncSeed(game));
+        }
         const auto turnStarted=std::chrono::steady_clock::now();
         const int begin=game.GetGameTurn();
         if(begin<0 || begin==INT_MAX || game.GetElapsedGameTurns()!=begin || !local.IsTurnActive())
@@ -101,16 +112,21 @@ public:
         game.UpdateTestEndTurn();
         if(fixtureUnitActions && !fixturePromotions)throw std::invalid_argument("SDK unit actions require fixture promotion inputs");
         if(fixturePromotions)FixturePromotionInput::Apply(scripts,thread.vm,host,fixtureUnitActions);
-        std::string skip=R"lua(
+        std::string skip=benchmark?"local skipped={}\n":"";
+        skip+=R"lua(
 local player=Players[Game.GetActivePlayer()]
 local count=0
 for unit in player:Units() do
     assert(unit:CanStartMission(MissionTypes.MISSION_SKIP,-1,-1,unit:GetPlot(),0))
     unit:PushMission(MissionTypes.MISSION_SKIP,-1,-1,0,0,1)
+)lua";
+        if(benchmark)skip+="    skipped[#skipped+1]=unit:GetID()\n";
+        skip+=R"lua(
     count=count+1
 end
 assert(not player:HasReadyUnit(), 'Local skip commands did not exhaust ready units')
 )lua";
+        if(benchmark)skip+="\nZeroSisTurnBenchmarkSkips=table.concat(skipped,',')\n";
         if(expectedUnitCount>=0)
             skip+="\nassert(count=="+std::to_string(expectedUnitCount)+", 'Initial fixture unit count differs')\n";
         std::printf("%s_INPUT=MISSION_SKIP_EACH_UNIT_THEN_CONTROL_ENDTURN\n",prefix);
@@ -141,6 +157,7 @@ assert(not player:HasReadyUnit(), 'Local skip commands did not exhaust ready uni
             throw std::runtime_error("SDK did not return to the next human turn with fresh completion signals");
         const auto turnDurationUs=std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now()-turnStarted).count();
+        if(benchmark)TurnBenchmarkObservation::End(game,host,thread.vm,prefix,previous.size(),nativeOrder);
         for(unsigned idle=0;idle<3;++idle){
             game.Update();
             if(game.GetGameTurn()!=end || game.GetElapsedGameTurns()!=end || !local.IsTurnActive() ||

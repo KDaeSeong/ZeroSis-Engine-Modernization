@@ -5,6 +5,7 @@
 #include "OriginalTerrainGeometry.h"
 #include "OriginalTerrainVertexPreparation.h"
 #include "OriginalTerrainShader.h"
+#include "OriginalTerrainTessellationShader.h"
 #include "OriginalFogBinding.h"
 #include "OriginalFogModel.h"
 #include "OriginalFogState.h"
@@ -549,7 +550,7 @@ bool RenderWorldTerrainImpl(const WorldView& view,std::uint32_t width,std::uint3
         const float noClip[4]={0,0,0,0};cache.context->UpdateSubresource(cache.clipConstants.Get(),0,nullptr,noClip,0,0);
         ID3D11Buffer* clip=cache.clipConstants.Get();cache.context->PSSetConstantBuffers(2,1,&clip);
         ID3D11SamplerState* sampler=cache.sampler.Get();cache.context->PSSetSamplers(0,1,&sampler);
-        if(groundData->original)DrawOriginalGround(view,cache,*groundData->original,fogEnabled,activeLighting,
+        if(groundData->original)DrawOriginalGround(view,cache,*groundData->original,matrix,fogEnabled,activeLighting,
             activeScreenLight?activeScreenLight->texture.Get():nullptr,mapWidth,height);
         else for(const auto& entry:groundData->groups){
             ID3D11Buffer* vb=entry.second.buffer.Get();const UINT stride=sizeof(Vertex),offset=0;cache.context->IASetVertexBuffers(0,1,&vb,&stride,&offset);

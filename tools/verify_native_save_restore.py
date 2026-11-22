@@ -17,10 +17,14 @@ def one(output,key):
     return values[0]
 
 
-def inspect_snapshot(data,expected_turn=1,initial_fixture=True):
+def inspect_snapshot(data,expected_turn=1,initial_fixture=True,allow_empty_cities=False):
     text=data.decode('utf8');rows=[line.split('|') for line in text.splitlines()]
     groups=collections.defaultdict(list)
     for row in rows:groups[row[0]].append(row[1:])
+    if allow_empty_cities:
+        # A cityless map emits no C rows. Every player's SDK city count is
+        # still checked against the complete enumeration below.
+        groups.setdefault('C',[])
     if set(groups)!={'G','M','P','U','C','T'} or groups['G']!=[[str(expected_turn),str(expected_turn),'0','960']]:
         raise RuntimeError('Restored state snapshot categories or game identity differ')
     expected_widths={'G':4,'M':11,'P':10,'U':12,'C':11,'T':3}

@@ -118,26 +118,14 @@ inline Result evaluate_shared_prevalidated(const CommonSnapshot& common,
                                            const PlotFacts* facts,
                                            std::size_t fact_count) noexcept {
     (void)fact_count;
-    Snapshot dense = common;
-    dense.center_can_found_visible = candidate.center_can_found_visible;
-    dense.center_can_found_full = candidate.center_can_found_full;
-    dense.center_has_unique_luxury = candidate.center_has_unique_luxury;
-    dense.center_has_resource_for_team = candidate.center_has_resource_for_team;
-    dense.center_is_river = candidate.center_is_river;
-    dense.center_is_coastal = candidate.center_is_coastal;
-    dense.center_area = candidate.center_area;
-    for (std::size_t offset = 0; offset < kOffsetCount; ++offset) {
+    const auto tile_at = [&candidate, facts](std::size_t offset) noexcept -> detail::ScoringTile {
         const Slot& slot = candidate.slots[offset];
-        if (slot.map_plot_index == kMissingPlot) {
-            dense.tiles[offset] = Tile{};
-        } else {
-            dense.tiles[offset] = facts[slot.map_plot_index].tile;
-            dense.tiles[offset].distance = slot.distance;
-            dense.tiles[offset].strategic_value =
-                facts[slot.map_plot_index].strategic_by_distance[static_cast<std::size_t>(slot.distance)];
-        }
-    }
-    return evaluate(dense);
+        if (slot.map_plot_index == kMissingPlot) return {};
+        const PlotFacts& fact = facts[slot.map_plot_index];
+        const auto distance = static_cast<std::size_t>(slot.distance);
+        return {&fact.tile, slot.distance, fact.strategic_by_distance[distance]};
+    };
+    return detail::score_site(common, candidate, tile_at);
 }
 
 inline Result evaluate_shared(const CommonSnapshot& common, const Candidate& candidate,

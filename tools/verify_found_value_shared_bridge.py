@@ -18,13 +18,14 @@ SOURCE = PROJECT / "Tests/found_value_shared_bridge.cpp"
 BRIDGE_CPP = PROJECT / "Source/Concurrency/FoundValueSharedBridge.cpp"
 BRIDGE_H = PROJECT / "Source/Concurrency/FoundValueSharedBridge.h"
 REFERENCE_BRIDGE_CPP = PROJECT / "Source/Concurrency/FoundValueScoreBridge.cpp"
+SERIAL_REFERENCE = PROJECT / "Tests/found_value_serial_reference.cpp"
 KERNEL_H = PROJECT / "Source/Concurrency/FoundValueSharedScores.h"
 BATCH_H = PROJECT / "Source/Concurrency/OrderedBatch.h"
 VERIFIER = Path(__file__).resolve()
 BUILD_ROOT = PROJECT / "Build/FoundValueSharedBridge"
 EVIDENCE_ROOT = PROJECT / "evidence/found_value_shared_bridge"
 VS = Path(r"C:\Program Files\Microsoft Visual Studio\2022\Community")
-MANDATORY = [SOURCE, BRIDGE_CPP, BRIDGE_H, REFERENCE_BRIDGE_CPP, KERNEL_H, BATCH_H, VERIFIER]
+MANDATORY = [SOURCE, BRIDGE_CPP, BRIDGE_H, REFERENCE_BRIDGE_CPP, SERIAL_REFERENCE, KERNEL_H, BATCH_H, VERIFIER]
 
 
 def digest(path: Path) -> str:
@@ -201,7 +202,7 @@ def build_one(name: str, optimization: str, compiler: Path, linker: Path,
     for label, standard, original_source, include_rel in (
         ("caller_cpp14", "c++14", SOURCE.resolve(), "Source/Concurrency"),
         ("bridge_cpp17", "c++17", BRIDGE_CPP.resolve(), "Source/Concurrency"),
-        ("dense_reference_cpp17", "c++17", REFERENCE_BRIDGE_CPP.resolve(), "Source/Concurrency"),
+        ("dense_reference_cpp17", "c++17", SERIAL_REFERENCE.resolve(), "Source/Concurrency"),
     ):
         source = mapping[original_source]
         include = frozen_project / include_rel
@@ -303,7 +304,7 @@ def main() -> None:
                                   run_dir / "discovery_caller", PROJECT / "Source/Concurrency"),
         "bridge_cpp17": discover(compiler, base_env, BRIDGE_CPP, "c++17", "bridge_cpp17",
                                   run_dir / "discovery_bridge", PROJECT / "Source/Concurrency"),
-        "dense_reference_cpp17": discover(compiler, base_env, REFERENCE_BRIDGE_CPP, "c++17",
+        "dense_reference_cpp17": discover(compiler, base_env, SERIAL_REFERENCE, "c++17",
                                             "dense_reference_cpp17", run_dir / "discovery_dense_reference",
                                             PROJECT / "Source/Concurrency"),
     }
@@ -355,7 +356,7 @@ def main() -> None:
         "gamecore_loaded": False, "sdk_dll_built": False, "sdk_runtime_launched": False,
         "wpr_started": False, "capture_performed": False,
         "found_value_cpu_trace_environment_cleared_for_component_run": True,
-        "scope": "ISOLATED_SHARED_FACTS_C_ABI_PREVALIDATION_OWNER_THREAD_INDEX_ONLY_ORDERED_BATCH_ALL_OR_NOTHING_OUTPUTS_AND_DENSE_ABI_DIFFERENTIAL",
+        "scope": "ISOLATED_SHARED_FACTS_C_ABI_PREVALIDATION_OWNER_THREAD_INDEX_ONLY_ORDERED_BATCH_ALL_OR_NOTHING_OUTPUTS_AND_DENSE_SERIAL_AND_ABI_DIFFERENTIAL",
     }
     destination = evidence_dir / "conformance.json"
     destination.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

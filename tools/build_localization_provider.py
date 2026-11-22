@@ -1,4 +1,5 @@
 """Build the real x64 SDK Localization String, parser, dictionary and ICU owner."""
+import argparse
 import json
 from pathlib import Path
 import re
@@ -11,6 +12,9 @@ from verify_localization_reference import artifacts
 
 
 def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--icu-data',type=Path,help='Read the installed icudt44l.dat directly for an isolated x64 build')
+    args=parser.parse_args()
     out=PROJECT/'Build/Localization/provider_x64';evidence=PROJECT/'evidence/localization/provider'
     out.mkdir(parents=True,exist_ok=True);evidence.mkdir(parents=True,exist_ok=True)
     reports={}
@@ -45,9 +49,16 @@ def main():
     result=run(command,cwd=out,env=env);log=evidence/'link.log';log.write_bytes(result.stdout+result.stderr);logs.append(log)
     if result.returncode:raise RuntimeError(read_text(log))
     dbdll=Path(reports['database'][1]['dll']['path']);shutil.copyfile(dbdll,out/dbdll.name)
-    reference=json.loads((PROJECT/'evidence/localization/reference/build_result.json').read_text(encoding='utf-8'))
-    data=next(Path(p['copy']['path']) for p in reference['original_inputs'] if p['copy']['path'].endswith('.dat'))
+    if args.icu_data is None:
+        reference=json.loads((PROJECT/'evidence/localization/reference/build_result.json').read_text(encoding='utf-8'))
+        data=next(Path(p['copy']['path']) for p in reference['original_inputs'] if p['copy']['path'].endswith('.dat'))
+    else:
+        data=args.icu_data.resolve(strict=True)
+    if data.name.lower()!='icudt44l.dat':raise ValueError('Expected the original ICU 44 data filename')
+    data_source=artifact(data)
     shutil.copyfile(data,out/data.name)
+    if digest(out/data.name)!=data_source['sha256'] or digest(data)!=data_source['sha256']:
+        raise RuntimeError('ICU data changed during its private copy')
     tests=[]
     for kind in ('trace','grammar','runtime','hardening'):
         source=PROJECT/('Tests/sdk_localization_'+kind+'.cpp');exe=out/('localization_'+kind+'.exe');testmap=out/(kind+'.map')
@@ -63,7 +74,7 @@ def main():
     report={'status':'SDK_LOCALIZATION_X64_CANDIDATE_BUILT','sources':[artifact(p) for p in all_sources],
         'dll':{**artifact(dll),'pe':pe_header(dll)},'library':artifact(library),'objects':[object_machine(p) for p in objects],
         'map':artifact(linkmap),'tests':tests,'dependencies':{k:artifact(v[0]) for k,v in reports.items()},
-        'copies':[artifact(out/p.name) for p in (dbdll,data)],'logs':[artifact(p) for p in logs],
+        'icu_data_source':data_source,'copies':[artifact(out/p.name) for p in (dbdll,data)],'logs':[artifact(p) for p in logs],
         'responses':[artifact(p) for p in responses],'link_command':[str(x) for x in command],
         'flags':common,'compiler':artifact(compiler),'builder':artifact(Path(__file__).resolve()),
         'game_launched':False,'gamecore_loaded':False,'scope':'Actual SDK Localization component; behavioral verification and GameCore linking required'}

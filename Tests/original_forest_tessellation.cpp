@@ -13,8 +13,8 @@ void Check(bool condition,const char* message){++checks;if(!condition)throw std:
 template<class Operation>void Reject(Operation operation,const char* message){bool rejected=false;try{operation();}catch(const std::invalid_argument&){rejected=true;}Check(rejected,message);}
 const float NaN=(std::numeric_limits<float>::quiet_NaN)(),Infinity=(std::numeric_limits<float>::infinity)();
 
-// Explicit test Bezier basis only. These values are never asserted to be the
-// original engine's unresolved cb1[10..13] upload or used by production drawing.
+// This fixture supplies its own Bezier basis. The retail default and its
+// compiled shader layout are covered by original_terrain_bicubic_binding.cpp.
 const T::Basis Bezier{{{{-1,3,-3,1}},{{3,-6,3,0}},{{-3,3,0,0}},{{1,0,0,0}}}};
 std::array<double,4> Bernstein(double t){const double a=1-t;return {{a*a*a,3*t*a*a,3*t*t*a,t*t*t}};}
 double Reference(const T::Heights& controls,double u,double v){

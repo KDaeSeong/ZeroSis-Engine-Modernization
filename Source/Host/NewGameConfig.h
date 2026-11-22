@@ -55,8 +55,10 @@ struct NewGameConfig {
         // rule rows use the script's actual database filename and default values.
         Database::Results mapRows;
         Require(database, database.Execute(mapRows,
-            "SELECT OptionID, DefaultValue FROM MapScriptOptions "
-            "WHERE FileName=? ORDER BY CAST(OptionID AS INTEGER), OptionID"), "MapScriptOptions query");
+            "SELECT o.OptionID, o.DefaultValue FROM MapScriptOptions o "
+            "WHERE o.FileName=? AND EXISTS (SELECT 1 FROM MapScriptOptionPossibleValues v "
+            "WHERE v.FileName=o.FileName AND v.OptionID=o.OptionID AND v.Value=o.DefaultValue) "
+            "ORDER BY CAST(o.OptionID AS INTEGER), o.OptionID"), "MapScriptOptions query");
         Require(database, mapRows.Bind(1, "Assets\\Maps\\Continents.lua"), "MapScriptOptions bind");
         while (mapRows.Step()) {
             const char* rawId = mapRows.GetText(0);
@@ -64,7 +66,7 @@ struct NewGameConfig {
             const std::string optionId(rawId);
             const int value = mapRows.GetInt(1);
             if ((optionId != "1" && optionId != "2" && optionId != "3" && optionId != "4" && optionId != "5") ||
-                value < 1 || value > 4 || !config.mapOptions.emplace(optionId, value).second)
+                value < 1 || value > (optionId == "5" ? 6 : 4) || !config.mapOptions.emplace(optionId, value).second)
                 throw std::runtime_error("Continents.lua custom-option rows are invalid or duplicated");
         }
         Complete(database, "MapScriptOptions iteration");
@@ -99,6 +101,19 @@ struct NewGameConfig {
         return config;
     }
 
+    void SelectBenchmarkHuman(Database::Connection& database,const char* type){
+        Database::Results row;
+        Require(database,database.Execute(row,
+            "SELECT c.ID,l.ID FROM Civilizations c JOIN Civilization_Leaders cl ON cl.CivilizationType=c.Type "
+            "JOIN Leaders l ON l.Type=cl.LeaderheadType WHERE c.Type=? AND c.Playable=1 ORDER BY l.ID"),
+            "Benchmark playable civilization query");
+        Require(database,row.Bind(1,type),"Benchmark civilization bind");
+        if(!row.Step())throw std::runtime_error("Benchmark human has no playable rules entry and leader");
+        civilizations[0]=static_cast<CivilizationTypes>(row.GetInt(0));
+        leaders[0]=static_cast<LeaderHeadTypes>(row.GetInt(1));
+        if(row.Step())throw std::runtime_error("Benchmark human civilization has multiple leaders");
+        Complete(database,"Benchmark civilization lookup");
+    }
     void ApplyAndVerify(ICvPreGame1& pregame) const {
         // These setters have reset side effects in the SDK. Set the map first,
         // then apply its custom options after the script name has cleared them.

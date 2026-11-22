@@ -1,9 +1,10 @@
 namespace OT=OriginalTerrain;
+namespace Tess=OriginalTerrainTessellation;
 struct LightingField;
 struct OriginalGpuMesh {
     ComPtr<ID3D11Buffer> vertices;
     OT::ChunkSlots slots;
-    bool dense=false;unsigned column=0,row=0;
+    bool dense=false,bicubicInterior=false;unsigned column=0,row=0;
     std::unique_ptr<LightingField> lightingField;
 };
 struct OriginalSurface {
@@ -14,7 +15,7 @@ struct OriginalSurface {
     // every historical camera window. Only current/candidate frames own them.
     std::vector<std::weak_ptr<OriginalGpuMesh>> meshes;
 };
-struct OriginalDraw {std::shared_ptr<OriginalGpuMesh> mesh;int column=0,row=0;};
+struct OriginalDraw {std::shared_ptr<OriginalGpuMesh> mesh;int column=0,row=0;OT::PatchWorld::Placement patch;};
 struct OriginalGroundData {
     std::shared_ptr<OriginalSurface> surface;
     std::vector<OriginalDraw> draws;
@@ -26,8 +27,9 @@ struct OriginalCatalog {
     OT::PieceLibrary library;OT::MaterialTable table;
     std::shared_ptr<OriginalSurface> surface;
     ComPtr<ID3D11VertexShader> vs;ComPtr<ID3D11PixelShader> ps;
+    ComPtr<ID3D11VertexShader> controlVs;ComPtr<ID3D11HullShader> hs;ComPtr<ID3D11DomainShader> ds;
     ComPtr<ID3D11InputLayout> layout;
-    ComPtr<ID3D11Buffer> constants,indices,quadIndices;
+    ComPtr<ID3D11Buffer> constants,patchConstants,indices,quadIndices,rimIndices,interiorIndices;
 };
 struct OriginalVertex {float x,y,z,u,v,light;std::uint32_t w0,w1;float nx,ny,nz;};
 static_assert(sizeof(OriginalVertex)==44,"Original terrain vertex layout differs");

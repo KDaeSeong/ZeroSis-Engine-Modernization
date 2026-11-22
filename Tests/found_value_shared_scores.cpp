@@ -5,6 +5,7 @@
 #undef main
 
 #include <cstring>
+#include <utility>
 
 using namespace zerosis::found_value_shared;
 
@@ -161,15 +162,22 @@ int main() {
     ++check_count;
 
     Snapshot faith_carry = make_base_snapshot();
+    faith_carry.human_player = true;
+    faith_carry.ring_modifier.fill(1);
+    faith_carry.settler_food_multiplier = 0;
     tile = {};
-    tile.owner = OwnerKind::unowned;
-    tile.faith_value = 2;
-    set_tile(faith_carry, -1, 0, 1, tile);
-    tile = {};
-    tile.owner = OwnerKind::unowned;
-    set_tile(faith_carry, 0, 4, 4, tile);
-    set_tile(faith_carry, 0, 5, 5, tile);
-    if (!compare_shared_case("source_faith_carry_distance4_5", faith_carry)) return 6;
+    tile.faith_value = 5;
+    tile.strategic_value = 2;
+    set_tile(faith_carry, -7, -7, 1, tile);
+    tile.strategic_value = 11;
+    set_tile(faith_carry, 0, 1, 4, tile);
+    tile.strategic_value = 17;
+    set_tile(faith_carry, 7, 7, 5, tile);
+    if (!compare_shared_case("source_faith_carry_near_first", faith_carry) ||
+        evaluate(faith_carry).score != 50) return 6;
+    std::swap(faith_carry.tiles.front(), faith_carry.tiles[kCenterOffset + 1]);
+    if (!compare_shared_case("source_faith_carry_far_first", faith_carry) ||
+        evaluate(faith_carry).score != 40) return 21;
 
     Snapshot no_capital = make_base_snapshot();
     no_capital.capital_present = false;
